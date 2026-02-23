@@ -1,31 +1,38 @@
 import cv2
 import json
-import random
 import re
 import subprocess
 import threading
 import time
-from urllib.parse import quote
+from pathlib import Path
+from urllib.parse import quote, unquote
 
-from pytapo import Tapo
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QImage, QPixmap
-from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 RED_BASE = "192.168.60."
 RECORD_FPS = 15
-CAMERAS_FILE = "cameras.dat"
-SETTINGS_FILE = "settings.dat"
+PING_TIMEOUT_MS = 400
+CONNECTION_CHECK_INTERVAL_MS = 60_000
+
+
+def _decode_if_needed(value: str) -> str:
+    """Permite cargar credenciales antiguas ya codificadas sin romper el login."""
+    try:
+        return unquote(value)
+    except Exception:
+        return value
 
 
 # ---------------- BUSCAR IP ----------------
-def buscar_ip_por_mac(mac):
-    """Búsqueda rápida de IP por MAC usando ping de 1 intento"""
+def buscar_ip_por_mac(mac: str):
+    """Búsqueda de IP por MAC usando ping corto + ARP."""
     mac = mac.lower().replace(":", "-")
     for i in range(1, 255):
         ip = f"{RED_BASE}{i}"
         subprocess.call(
-            f"ping -n 1 -w 20 {ip}",
+            f"ping -n 1 -w {PING_TIMEOUT_MS} {ip}",
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             shell=True,
@@ -39,93 +46,145 @@ def buscar_ip_por_mac(mac):
     return None
 
 
-# ---------------- AJUSTES ----------------
-def default_settings():
-    return {"tapo_user": "", "tapo_password": ""}
-
-
-def load_settings():
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            data = json.loads(f.read())
-            return {
-                "tapo_user": data.get("tapo_user", ""),
-                "tapo_password": data.get("tapo_password", ""),
-            }
-    except FileNotFoundError:
-        return default_settings()
-
-
-def save_settings(settings):
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-        f.write(json.dumps(settings, indent=4))
-
-
 # ---------------- CAMERA THREAD ----------------
 class CameraFeed(threading.Thread):
     def __init__(self, mac, usuario, password, settings=None):
         super().__init__(daemon=True)
         self.mac = mac
-        self.usuario = usuario
-        self.password = password
-        self.settings = settings or default_settings()
 
+        # Guardamos versiones sin codificar para persistencia
+        self.usuario_raw = _decode_if_needed(usuario)
+        self.password_raw = _decode_if_needed(password)
+
+        self.usuario = quote(self.usuario_raw, safe="")
+        self.password = quote(self.password_raw, safe="")
         self.ip = None
         self.rtsp_url = None
         self.frame = None
+
+        self.capture_lock = threading.Lock()
+        self.writer_lock = threading.Lock()
+
         self.recording = False
         self.out = None
         self.last_write = 0
         self.write_interval = 1 / RECORD_FPS
 
-        threading.Thread(target=self.init_ip_and_rtsp, daemon=True).start()
+        self._stop_event = threading.Event()
+        self._force_reconnect_event = threading.Event()
+        self._last_ok_read = 0
+        self.connected = False
 
-    def init_ip_and_rtsp(self):
-        self.ip = buscar_ip_por_mac(self.mac)
-        if self.ip:
-            user_quoted = quote(self.usuario, safe="")
-            pass_quoted = quote(self.password, safe="")
-            self.rtsp_url = f"rtsp://{user_quoted}:{pass_quoted}@{self.ip}:554/stream1"
-            threading.Thread(target=self.run_capture, daemon=True).start()
+    def run(self):
+        self._connect_and_capture_loop()
 
-    def run_capture(self):
-        if not self.rtsp_url:
+    def stop(self):
+        self._stop_event.set()
+        self._force_reconnect_event.set()
+        with self.writer_lock:
+            if self.out is not None:
+                self.out.release()
+                self.out = None
+                self.recording = False
+
+    def request_reconnect(self):
+        self._force_reconnect_event.set()
+
+    def check_connection(self):
+        """Comprueba conexión y fuerza reconexión si está caída."""
+        if self._stop_event.is_set():
             return
 
-        while True:
+        stale = (time.time() - self._last_ok_read) > 10
+        if not self.connected or stale:
+            self.request_reconnect()
+
+    def _build_rtsp_url(self):
+        if self.ip:
+            self.rtsp_url = f"rtsp://{self.usuario}:{self.password}@{self.ip}:554/stream1"
+
+    def _resolve_ip_if_needed(self):
+        if self.ip is None:
+            self.ip = buscar_ip_por_mac(self.mac)
+            self._build_rtsp_url()
+
+    def _connect_and_capture_loop(self):
+        while not self._stop_event.is_set():
+            self._resolve_ip_if_needed()
+            if not self.rtsp_url:
+                self.connected = False
+                time.sleep(3)
+                continue
+
             cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-            while True:
-                ret, frame = cap.read()
-                if not ret or frame is None or frame.size == 0:
-                    cap.release()
-                    time.sleep(1)
+            if not cap.isOpened():
+                self.connected = False
+                cap.release()
+                time.sleep(2)
+                continue
+
+            self.connected = True
+            self._last_ok_read = time.time()
+            self._force_reconnect_event.clear()
+
+            while not self._stop_event.is_set():
+                if self._force_reconnect_event.is_set():
+                    self.connected = False
                     break
 
-                self.frame = frame
+                ret, frame = cap.read()
+                if not ret or frame is None or frame.size == 0:
+                    self.connected = False
+                    time.sleep(0.4)
+                    break
 
-                if self.recording and self.out:
-                    now = time.time()
-                    if now - self.last_write >= self.write_interval:
-                        self.out.write(frame)
-                        self.last_write = now
+                with self.capture_lock:
+                    self.frame = frame
+
+                self._last_ok_read = time.time()
+                self.connected = True
+                self._write_if_recording(frame)
+
+            cap.release()
+            self._force_reconnect_event.clear()
+            time.sleep(1)
+
+    def _write_if_recording(self, frame):
+        with self.writer_lock:
+            if self.recording and self.out:
+                now = time.time()
+                if now - self.last_write >= self.write_interval:
+                    self.out.write(frame)
+                    self.last_write = now
 
     def toggle_record(self):
-        if not self.recording and self.frame is not None:
-            h, w, _ = self.frame.shape
-            self.out = cv2.VideoWriter(
-                f"grab_{self.ip}_{int(time.time())}.mp4",
-                cv2.VideoWriter_fourcc(*"mp4v"),
-                RECORD_FPS,
-                (w, h),
-            )
-            self.recording = True
-        else:
+        with self.writer_lock:
+            if not self.recording and self.frame is not None:
+                h, w, _ = self.frame.shape
+                filename = f"grab_{self.ip or self.mac}_{int(time.time())}.mp4"
+                self.out = cv2.VideoWriter(
+                    filename,
+                    cv2.VideoWriter_fourcc(*"mp4v"),
+                    RECORD_FPS,
+                    (w, h),
+                )
+                if not self.out.isOpened():
+                    self.out = None
+                    self.recording = False
+                    return False
+
+                self.recording = True
+                self.last_write = time.time()
+                return True
+
             self.recording = False
             if self.out:
                 self.out.release()
                 self.out = None
+            return True
+
 
     def set_settings(self, settings):
         self.settings = settings
@@ -162,23 +221,17 @@ class CameraWidget(QWidget):
     def __init__(self, feed):
         super().__init__()
         self.feed = feed
-        accent = random.choice(["#38BDF8", "#A7F3D0", "#FDE68A", "#FCA5A5"])
 
-        self.setStyleSheet(
-            f"""
-        QWidget {{
-            background-color: #111827;
-            border-radius: 12px;
-            border: 2px solid {accent};
-        }}
-        """
-        )
+        self.setObjectName("cameraCard")
 
-        self.label = QLabel("Cargando...", alignment=Qt.AlignmentFlag.AlignCenter)
-        self.label.setStyleSheet("background:black; border-radius:8px; color:white;")
+        self.label = QLabel("Conectando…", alignment=Qt.AlignmentFlag.AlignCenter)
+        self.label.setObjectName("videoLabel")
+
+        self.status = QLabel("⏳ Iniciando…")
+        self.status.setObjectName("statusLabel")
 
         self.btn = QPushButton("⏺ Grabar")
-        self.btn.clicked.connect(self.feed.toggle_record)
+        self.btn.clicked.connect(self.on_toggle_record)
 
         btns = QHBoxLayout()
         btns.addStretch()
@@ -186,8 +239,9 @@ class CameraWidget(QWidget):
         btns.addStretch()
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
+        layout.addWidget(self.status)
         layout.addWidget(self.label, stretch=1)
         layout.addLayout(btns)
 
@@ -198,9 +252,32 @@ class CameraWidget(QWidget):
         self.timer.timeout.connect(self.update_frame)
         self.timer.start(40)
 
+        self.connection_timer = QTimer()
+        self.connection_timer.timeout.connect(self._minute_connection_check)
+        self.connection_timer.start(CONNECTION_CHECK_INTERVAL_MS)
+
+    def _minute_connection_check(self):
+        self.feed.check_connection()
+
+    def on_toggle_record(self):
+        ok = self.feed.toggle_record()
+        if not ok:
+            self.status.setText("❌ Error al iniciar grabación")
+            self.btn.setText("⏺ Grabar")
+            return
+
+        if self.feed.recording:
+            self.btn.setText("⏹ Detener")
+            self.status.setText("🔴 Grabando")
+        else:
+            self.btn.setText("⏺ Grabar")
+
     def update_frame(self):
         if self.feed.frame is not None:
-            rgb = cv2.cvtColor(self.feed.frame, cv2.COLOR_BGR2RGB)
+            with self.feed.capture_lock:
+                frame = self.feed.frame.copy()
+
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img = QImage(
                 rgb.data,
                 rgb.shape[1],
@@ -215,6 +292,12 @@ class CameraWidget(QWidget):
                     Qt.TransformationMode.SmoothTransformation,
                 )
             )
+            self.status.setText(
+                f"🟢 En línea | IP: {self.feed.ip or 'resolviendo'}"
+                + (" | 🔴 Grabando" if self.feed.recording else "")
+            )
+        else:
+            self.status.setText("🟡 Sin imagen, reconectando…")
 
     def open_window(self, event):
         if self.cam_window is None:
@@ -286,7 +369,10 @@ class CameraWindow(QWidget):
 
     def update_frame(self):
         if self.feed.frame is not None:
-            rgb = cv2.cvtColor(self.feed.frame, cv2.COLOR_BGR2RGB)
+            with self.feed.capture_lock:
+                frame = self.feed.frame.copy()
+
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img = QImage(
                 rgb.data,
                 rgb.shape[1],
@@ -302,48 +388,34 @@ class CameraWindow(QWidget):
                 )
             )
 
-    def send_move(self, x_axis, y_axis):
-        self.status.setText("Enviando movimiento...")
-
-        def worker():
-            try:
-                self.feed.move(x_axis, y_axis)
-                self.status.setText("Movimiento aplicado")
-            except Exception as exc:
-                self.status.setText(f"Error PTZ: {exc}")
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def send_zoom(self, zoom_in):
-        self.status.setText("Aplicando zoom...")
-
-        def worker():
-            try:
-                self.feed.zoom(zoom_in)
-                self.status.setText("Zoom aplicado")
-            except Exception as exc:
-                self.status.setText(f"Error zoom: {exc}")
-
-        threading.Thread(target=worker, daemon=True).start()
-
 
 # ---------------- GUARDAR Y CARGAR ----------------
 def save_cameras(widgets):
     cams_data = []
     for w in widgets:
-        cam = {"mac": w.feed.mac, "usuario": w.feed.usuario, "password": w.feed.password}
+        cam = {
+            "mac": w.feed.mac,
+            "usuario": w.feed.usuario_raw,
+            "password": w.feed.password_raw,
+        }
         cams_data.append(cam)
-    with open(CAMERAS_FILE, "w", encoding="utf-8") as f:
-        f.write(json.dumps(cams_data, indent=4))
+
+    data_file = Path(__file__).with_name("cameras.dat")
+    with data_file.open("w", encoding="utf-8") as f:
+        json.dump(cams_data, f, indent=4, ensure_ascii=False)
+
 
 
 def load_cameras(settings=None):
     widgets = []
+    data_file = Path(__file__).with_name("cameras.dat")
+
     try:
-        with open(CAMERAS_FILE, "r", encoding="utf-8") as f:
-            cams_data = json.loads(f.read())
+        with data_file.open("r", encoding="utf-8") as f:
+            cams_data = json.load(f)
             for cam in cams_data:
-                feed = CameraFeed(cam["mac"], cam["usuario"], cam["password"], settings=settings)
+                feed = CameraFeed(cam["mac"], cam["usuario"], cam["password"])
+                feed.start()
                 widget = CameraWidget(feed)
                 widgets.append(widget)
     except FileNotFoundError:
