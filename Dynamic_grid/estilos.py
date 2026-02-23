@@ -1,102 +1,127 @@
 APP_STYLE = """
 QMainWindow {
-    background: qlineargradient(
-        x1: 0, y1: 0, x2: 1, y2: 1,
-        stop: 0 #eef3fb,
-        stop: 1 #dbeafe
-    );
+    background: #dddfe3;
 }
 
 QWidget {
     font-family: 'Segoe UI';
-    color: #0f172a;
+    color: #4b5563;
     font-size: 13px;
 }
 
-QLabel#headerTitle {
-    font-size: 22px;
+QLabel#topBadge {
+    margin-top: 8px;
+    margin-bottom: 18px;
+    padding: 10px 26px;
+    border-radius: 8px;
+    background: #a997cd;
+    color: white;
+    font-size: 28px;
     font-weight: 700;
-    color: #0b1324;
 }
 
 QLabel#headerCounter {
     font-size: 13px;
-    font-weight: 600;
-    color: #334155;
-    padding: 6px 8px;
-    background: rgba(255, 255, 255, 0.6);
+    color: #6b7280;
+    background: #f3f4f6;
+    border: 1px solid #d1d5db;
     border-radius: 8px;
+    padding: 6px 10px;
 }
 
 QPushButton {
-    background-color: rgba(255, 255, 255, 0.78);
-    color: #0f172a;
-    border: 1px solid rgba(255, 255, 255, 0.9);
-    border-radius: 10px;
-    padding: 8px 14px;
+    background: #f8fafc;
+    color: #4b5563;
+    border: 1px solid #cfd4dc;
+    border-radius: 8px;
+    padding: 8px 12px;
     font-weight: 600;
 }
 
 QPushButton#primaryButton {
-    background-color: #2563eb;
+    background: #a997cd;
     color: white;
-    border: 1px solid #1d4ed8;
-}
-
-QPushButton#primaryButton:hover {
-    background-color: #1d4ed8;
+    border-color: #9e8bc3;
 }
 
 QPushButton:hover {
-    background-color: rgba(255, 255, 255, 0.95);
+    background: #eef2f7;
 }
 
-QPushButton:pressed {
-    background-color: rgba(191, 219, 254, 0.95);
-}
-
-QPushButton#padButton {
-    font-size: 16px;
-    font-weight: 700;
-    border-radius: 10px;
-    padding: 4px;
-}
-
-QPushButton#zoomButton {
-    font-size: 12px;
-    font-weight: 700;
+QPushButton#primaryButton:hover {
+    background: #9986bf;
 }
 
 QWidget#cameraCard {
-    background-color: rgba(255, 255, 255, 0.62);
-    border: 1px solid rgba(255, 255, 255, 0.9);
-    border-radius: 16px;
+    background: #f6f7f9;
+    border: 1px solid #c7cdd6;
+    border-radius: 4px;
 }
 
-QLabel#videoLabel {
-    background-color: #020617;
-    border-radius: 12px;
-    color: #cbd5e1;
+QWidget#cardHeader {
+    min-height: 150px;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+}
+
+QWidget#cameraCard[accent="coral"] QWidget#cardHeader {
+    background: #f2694c;
+}
+
+QWidget#cameraCard[accent="green"] QWidget#cardHeader {
+    background: #7cc86c;
+}
+
+QWidget#cameraCard[accent="cyan"] QWidget#cardHeader {
+    background: #4ec0cf;
+}
+
+QLabel#cardTitle {
+    color: rgba(255, 255, 255, 0.96);
+    font-size: 18px;
+    font-weight: 700;
+}
+
+QLabel#cardSubtitle {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 12px;
+    font-weight: 600;
 }
 
 QLabel#statusLabel {
-    color: #0f172a;
+    margin: 0 10px;
+    padding: 6px 10px;
+    background: #e6e8ec;
+    color: #6b7280;
+    border-radius: 2px;
     font-size: 12px;
     font-weight: 600;
-    padding-left: 4px;
+}
+
+QLabel#videoLabel {
+    margin: 0 10px;
+    background: #f6f7f9;
+    border: none;
+    color: #9ca3af;
 }
 
 QLabel#emptyState {
-    background: rgba(255, 255, 255, 0.72);
-    border: 1px dashed #93c5fd;
-    border-radius: 14px;
-    color: #334155;
+    background: #f8fafc;
+    border: 1px dashed #cfd4dc;
+    color: #6b7280;
+    border-radius: 8px;
     font-size: 14px;
     font-weight: 600;
     padding: 28px;
 }
 
+QPushButton#padButton,
+QPushButton#zoomButton {
+    border-radius: 6px;
+}
+
 QStatusBar {
-    background: rgba(255, 255, 255, 0.55);
+    background: #e9edf2;
+    border-top: 1px solid #cfd4dc;
 }
 """

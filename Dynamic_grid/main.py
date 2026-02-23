@@ -120,9 +120,8 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(12, 12, 12, 12)
         root_layout.setSpacing(10)
 
-        header_layout = QHBoxLayout()
-        self.title_label = QLabel("Panel de cámaras")
-        self.title_label.setObjectName("headerTitle")
+        toolbar_layout = QHBoxLayout()
+        toolbar_layout.setContentsMargins(4, 0, 4, 0)
 
         self.counter_label = QLabel("0 cámaras")
         self.counter_label.setObjectName("headerCounter")
@@ -131,16 +130,19 @@ class MainWindow(QMainWindow):
         self.btn_add.setObjectName("primaryButton")
         self.btn_add.clicked.connect(self.add_camera_dialog)
 
-        self.btn_config = QPushButton("⚙️ Configuración Tapo")
+        self.btn_config = QPushButton("⚙️ Configuración")
         self.btn_config.clicked.connect(self.open_settings_dialog)
 
-        header_layout.addWidget(self.title_label)
-        header_layout.addStretch()
-        header_layout.addWidget(self.counter_label)
-        header_layout.addSpacing(8)
-        header_layout.addWidget(self.btn_config)
-        header_layout.addWidget(self.btn_add)
-        root_layout.addLayout(header_layout)
+        toolbar_layout.addWidget(self.counter_label)
+        toolbar_layout.addStretch()
+        toolbar_layout.addWidget(self.btn_config)
+        toolbar_layout.addWidget(self.btn_add)
+        root_layout.addLayout(toolbar_layout)
+
+        self.top_badge = QLabel("▤")
+        self.top_badge.setObjectName("topBadge")
+        self.top_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        root_layout.addWidget(self.top_badge, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         self.grid_host = QWidget()
         self.grid = QGridLayout(self.grid_host)

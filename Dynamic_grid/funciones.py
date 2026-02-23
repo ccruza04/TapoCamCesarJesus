@@ -236,6 +236,20 @@ class CameraWidget(QWidget):
 
         self.label = QLabel("Conectando…", alignment=Qt.AlignmentFlag.AlignCenter)
         self.label.setObjectName("videoLabel")
+        self.label.setMinimumHeight(210)
+
+        self.header = QWidget()
+        self.header.setObjectName("cardHeader")
+
+        self.header_title = QLabel(f"Cámara {self.feed.mac[-5:]}")
+        self.header_title.setObjectName("cardTitle")
+
+        self.header_subtitle = QLabel("Transmisión en vivo")
+        self.header_subtitle.setObjectName("cardSubtitle")
+
+        palette = ["coral", "green", "cyan"]
+        accent = palette[sum(ord(char) for char in self.feed.mac) % len(palette)]
+        self.setProperty("accent", accent)
 
         self.status = QLabel("⏳ Iniciando…")
         self.status.setObjectName("statusLabel")
@@ -248,9 +262,16 @@ class CameraWidget(QWidget):
         btns.addWidget(self.btn)
         btns.addStretch()
 
+        header_layout = QVBoxLayout(self.header)
+        header_layout.setContentsMargins(14, 12, 14, 12)
+        header_layout.setSpacing(2)
+        header_layout.addWidget(self.header_title)
+        header_layout.addWidget(self.header_subtitle)
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(0, 0, 0, 12)
+        layout.setSpacing(10)
+        layout.addWidget(self.header)
         layout.addWidget(self.status)
         layout.addWidget(self.label, stretch=1)
         layout.addLayout(btns)
