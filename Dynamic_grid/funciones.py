@@ -255,6 +255,10 @@ class CameraWidget(QWidget):
         self.status = QLabel("⏳ Iniciando…")
         self.status.setObjectName("statusLabel")
 
+        self.hint = QLabel("Doble clic en el video para abrir controles PTZ")
+        self.hint.setObjectName("cardHint")
+        self.hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         self.btn = QPushButton("⏺ Grabar")
         self.btn.clicked.connect(self.on_toggle_record)
 
@@ -276,6 +280,7 @@ class CameraWidget(QWidget):
         layout.addWidget(self.header)
         layout.addWidget(self.status)
         layout.addWidget(self.label, stretch=1)
+        layout.addWidget(self.hint)
         layout.addLayout(btns)
 
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)

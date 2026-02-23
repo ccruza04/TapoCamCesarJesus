@@ -120,8 +120,21 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(16, 14, 16, 14)
         root_layout.setSpacing(12)
 
-        toolbar_layout = QHBoxLayout()
-        toolbar_layout.setContentsMargins(4, 0, 4, 0)
+        top_layout = QHBoxLayout()
+        top_layout.setContentsMargins(4, 0, 4, 0)
+        top_layout.setSpacing(12)
+
+        title_wrap = QVBoxLayout()
+        title_wrap.setSpacing(2)
+        self.title_label = QLabel("Panel de cámaras")
+        self.title_label.setObjectName("headerTitle")
+        self.subtitle_label = QLabel("Supervisión en tiempo real")
+        self.subtitle_label.setObjectName("headerSubtitle")
+        title_wrap.addWidget(self.title_label)
+        title_wrap.addWidget(self.subtitle_label)
+
+        top_layout.addLayout(title_wrap)
+        top_layout.addStretch()
 
         self.counter_label = QLabel("0 cámaras")
         self.counter_label.setObjectName("headerCounter")
@@ -133,11 +146,10 @@ class MainWindow(QMainWindow):
         self.btn_config = QPushButton("⚙️ Configuración")
         self.btn_config.clicked.connect(self.open_settings_dialog)
 
-        toolbar_layout.addWidget(self.counter_label)
-        toolbar_layout.addStretch()
-        toolbar_layout.addWidget(self.btn_config)
-        toolbar_layout.addWidget(self.btn_add)
-        root_layout.addLayout(toolbar_layout)
+        top_layout.addWidget(self.counter_label)
+        top_layout.addWidget(self.btn_config)
+        top_layout.addWidget(self.btn_add)
+        root_layout.addLayout(top_layout)
 
         self.top_badge = QLabel("▦")
         self.top_badge.setObjectName("topBadge")
