@@ -7,14 +7,15 @@ import time
 from pathlib import Path
 from urllib.parse import quote, unquote
 
-from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 RED_BASE = "192.168.60."
 RECORD_FPS = 15
 PING_TIMEOUT_MS = 400
 CONNECTION_CHECK_INTERVAL_MS = 60_000
+SETTINGS_FILE = "settings.json"
 
 
 def _decode_if_needed(value: str) -> str:
@@ -49,7 +50,7 @@ def buscar_ip_por_mac(mac: str):
 # ---------------- CAMERA THREAD ----------------
 class CameraFeed(threading.Thread):
     def __init__(self, mac, usuario, password, settings=None):
-        super().__init__(daemon=True)
+        super().__init__(daemon=True, name=f"CameraStream-{mac}")
         self.mac = mac
 
         # Guardamos versiones sin codificar para persistencia
@@ -74,6 +75,7 @@ class CameraFeed(threading.Thread):
         self._force_reconnect_event = threading.Event()
         self._last_ok_read = 0
         self.connected = False
+        self.settings = settings or {}
 
     def run(self):
         self._connect_and_capture_loop()
@@ -190,11 +192,13 @@ class CameraFeed(threading.Thread):
         self.settings = settings
 
     def get_tapo_client(self):
+        from pytapo import Tapo
+
         if not self.ip:
             raise RuntimeError("La cámara todavía no tiene IP asignada")
 
-        tapo_user = self.settings.get("tapo_user", "").strip() or self.usuario
-        tapo_password = self.settings.get("tapo_password", "").strip() or self.password
+        tapo_user = self.settings.get("tapo_user", "").strip() or self.usuario_raw
+        tapo_password = self.settings.get("tapo_password", "").strip() or self.password_raw
         return Tapo(self.ip, tapo_user, tapo_password)
 
     def _call_first_available(self, client, method_names, *args):
@@ -307,14 +311,17 @@ class CameraWidget(QWidget):
 
 # ---------------- CAMERA WINDOW ----------------
 class CameraWindow(QWidget):
+    action_result = pyqtSignal(str)
+
     def __init__(self, feed):
         super().__init__()
         self.setWindowTitle(f"Cámara {feed.ip or feed.mac}")
-        self.resize(760, 540)
+        self.resize(700, 480)
         self.feed = feed
 
         self.label = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
         self.status = QLabel("Controles PTZ listos")
+        self.action_result.connect(self.status.setText)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.label, stretch=1)
@@ -339,10 +346,13 @@ class CameraWindow(QWidget):
             self.btn_left,
             self.btn_right,
             self.btn_center,
-            self.btn_zoom_in,
-            self.btn_zoom_out,
         ]:
-            btn.setFixedSize(90, 34)
+            btn.setFixedSize(52, 40)
+            btn.setObjectName("padButton")
+
+        for btn in [self.btn_zoom_in, self.btn_zoom_out]:
+            btn.setFixedSize(84, 32)
+            btn.setObjectName("zoomButton")
 
         controls_layout.addWidget(self.btn_up, 0, 1)
         controls_layout.addWidget(self.btn_left, 1, 0)
@@ -367,6 +377,23 @@ class CameraWindow(QWidget):
         self.timer.timeout.connect(self.update_frame)
         self.timer.start(40)
 
+    def _run_camera_action(self, action, success_message):
+        def worker():
+            try:
+                action()
+                self.action_result.emit(success_message)
+            except Exception as exc:
+                self.action_result.emit(f"❌ {exc}")
+
+        threading.Thread(target=worker, daemon=True, name=f"PTZ-{self.feed.mac}").start()
+
+    def send_move(self, x_axis, y_axis):
+        self._run_camera_action(lambda: self.feed.move(x_axis, y_axis), "✅ Movimiento enviado")
+
+    def send_zoom(self, zoom_in):
+        message = "✅ Zoom + enviado" if zoom_in else "✅ Zoom - enviado"
+        self._run_camera_action(lambda: self.feed.zoom(zoom_in), message)
+
     def update_frame(self):
         if self.feed.frame is not None:
             with self.feed.capture_lock:
@@ -390,6 +417,31 @@ class CameraWindow(QWidget):
 
 
 # ---------------- GUARDAR Y CARGAR ----------------
+def save_settings(settings):
+    settings_file = Path(__file__).with_name(SETTINGS_FILE)
+    with settings_file.open("w", encoding="utf-8") as f:
+        json.dump(settings, f, indent=4, ensure_ascii=False)
+
+
+def load_settings():
+    settings_file = Path(__file__).with_name(SETTINGS_FILE)
+
+    try:
+        with settings_file.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return {
+                    "tapo_user": str(data.get("tapo_user", "")),
+                    "tapo_password": str(data.get("tapo_password", "")),
+                }
+    except FileNotFoundError:
+        pass
+    except json.JSONDecodeError:
+        pass
+
+    return {"tapo_user": "", "tapo_password": ""}
+
+
 def save_cameras(widgets):
     cams_data = []
     for w in widgets:
@@ -414,7 +466,7 @@ def load_cameras(settings=None):
         with data_file.open("r", encoding="utf-8") as f:
             cams_data = json.load(f)
             for cam in cams_data:
-                feed = CameraFeed(cam["mac"], cam["usuario"], cam["password"])
+                feed = CameraFeed(cam["mac"], cam["usuario"], cam["password"], settings=settings)
                 feed.start()
                 widget = CameraWidget(feed)
                 widgets.append(widget)
