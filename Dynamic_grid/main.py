@@ -117,8 +117,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         root_layout = QVBoxLayout(central)
-        root_layout.setContentsMargins(12, 12, 12, 12)
-        root_layout.setSpacing(10)
+        root_layout.setContentsMargins(16, 14, 16, 14)
+        root_layout.setSpacing(12)
 
         toolbar_layout = QHBoxLayout()
         toolbar_layout.setContentsMargins(4, 0, 4, 0)
@@ -139,15 +139,15 @@ class MainWindow(QMainWindow):
         toolbar_layout.addWidget(self.btn_add)
         root_layout.addLayout(toolbar_layout)
 
-        self.top_badge = QLabel("▤")
+        self.top_badge = QLabel("▦")
         self.top_badge.setObjectName("topBadge")
         self.top_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root_layout.addWidget(self.top_badge, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         self.grid_host = QWidget()
         self.grid = QGridLayout(self.grid_host)
-        self.grid.setSpacing(12)
-        self.grid.setContentsMargins(2, 2, 2, 2)
+        self.grid.setSpacing(16)
+        self.grid.setContentsMargins(4, 4, 4, 4)
 
         self.empty_label = QLabel("No hay cámaras configuradas. Usa ‘Agregar cámara’ para comenzar.")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)

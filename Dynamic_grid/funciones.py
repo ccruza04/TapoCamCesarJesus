@@ -1,5 +1,6 @@
 import cv2
 import json
+import hashlib
 import re
 import subprocess
 import threading
@@ -241,15 +242,15 @@ class CameraWidget(QWidget):
         self.header = QWidget()
         self.header.setObjectName("cardHeader")
 
-        self.header_title = QLabel(f"Cámara {self.feed.mac[-5:]}")
+        camera_name = f"Cámara {self.feed.mac[-5:]}"
+        self.header_title = QLabel(camera_name)
         self.header_title.setObjectName("cardTitle")
 
         self.header_subtitle = QLabel("Transmisión en vivo")
         self.header_subtitle.setObjectName("cardSubtitle")
 
-        palette = ["coral", "green", "cyan"]
-        accent = palette[sum(ord(char) for char in self.feed.mac) % len(palette)]
-        self.setProperty("accent", accent)
+        accent_seed = int(hashlib.sha1(camera_name.encode("utf-8")).hexdigest(), 16)
+        self.setProperty("accent", str(accent_seed % 8))
 
         self.status = QLabel("⏳ Iniciando…")
         self.status.setObjectName("statusLabel")
@@ -258,6 +259,7 @@ class CameraWidget(QWidget):
         self.btn.clicked.connect(self.on_toggle_record)
 
         btns = QHBoxLayout()
+        btns.setContentsMargins(14, 0, 14, 0)
         btns.addStretch()
         btns.addWidget(self.btn)
         btns.addStretch()
@@ -276,6 +278,7 @@ class CameraWidget(QWidget):
         layout.addWidget(self.label, stretch=1)
         layout.addLayout(btns)
 
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.mouseDoubleClickEvent = self.open_window
         self.cam_window = None
 
@@ -319,7 +322,7 @@ class CameraWidget(QWidget):
             self.label.setPixmap(
                 QPixmap.fromImage(img).scaled(
                     self.label.size(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                     Qt.TransformationMode.SmoothTransformation,
                 )
             )
@@ -454,7 +457,7 @@ class CameraWindow(QWidget):
             self.label.setPixmap(
                 QPixmap.fromImage(img).scaled(
                     self.label.size(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                     Qt.TransformationMode.SmoothTransformation,
                 )
             )
