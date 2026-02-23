@@ -13,6 +13,21 @@ QWidget {
     font-size: 13px;
 }
 
+QLabel#headerTitle {
+    font-size: 22px;
+    font-weight: 700;
+    color: #0b1324;
+}
+
+QLabel#headerCounter {
+    font-size: 13px;
+    font-weight: 600;
+    color: #334155;
+    padding: 6px 8px;
+    background: rgba(255, 255, 255, 0.6);
+    border-radius: 8px;
+}
+
 QPushButton {
     background-color: rgba(255, 255, 255, 0.78);
     color: #0f172a;
@@ -22,12 +37,34 @@ QPushButton {
     font-weight: 600;
 }
 
+QPushButton#primaryButton {
+    background-color: #2563eb;
+    color: white;
+    border: 1px solid #1d4ed8;
+}
+
+QPushButton#primaryButton:hover {
+    background-color: #1d4ed8;
+}
+
 QPushButton:hover {
     background-color: rgba(255, 255, 255, 0.95);
 }
 
 QPushButton:pressed {
     background-color: rgba(191, 219, 254, 0.95);
+}
+
+QPushButton#padButton {
+    font-size: 16px;
+    font-weight: 700;
+    border-radius: 10px;
+    padding: 4px;
+}
+
+QPushButton#zoomButton {
+    font-size: 12px;
+    font-weight: 700;
 }
 
 QWidget#cameraCard {
@@ -47,5 +84,19 @@ QLabel#statusLabel {
     font-size: 12px;
     font-weight: 600;
     padding-left: 4px;
+}
+
+QLabel#emptyState {
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px dashed #93c5fd;
+    border-radius: 14px;
+    color: #334155;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 28px;
+}
+
+QStatusBar {
+    background: rgba(255, 255, 255, 0.55);
 }
 """
