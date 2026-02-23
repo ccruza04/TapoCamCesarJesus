@@ -11,6 +11,11 @@ from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
+try:
+    from pytapo import Tapo
+except ModuleNotFoundError:
+    Tapo = None
+
 RED_BASE = "192.168.60."
 RECORD_FPS = 15
 PING_TIMEOUT_MS = 400
@@ -192,7 +197,8 @@ class CameraFeed(threading.Thread):
         self.settings = settings
 
     def get_tapo_client(self):
-        from pytapo import Tapo
+        if Tapo is None:
+            raise RuntimeError("Falta el módulo 'pytapo'. Instala con: pip install pytapo")
 
         if not self.ip:
             raise RuntimeError("La cámara todavía no tiene IP asignada")
@@ -373,9 +379,26 @@ class CameraWindow(QWidget):
         self.btn_zoom_in.clicked.connect(lambda: self.send_zoom(True))
         self.btn_zoom_out.clicked.connect(lambda: self.send_zoom(False))
 
+        if Tapo is None:
+            self._set_ptz_enabled(False)
+            self.status.setText("⚠️ PTZ deshabilitado: instala pytapo")
+
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
         self.timer.start(40)
+
+    def _set_ptz_enabled(self, enabled):
+        controls = [
+            self.btn_up,
+            self.btn_down,
+            self.btn_left,
+            self.btn_right,
+            self.btn_center,
+            self.btn_zoom_in,
+            self.btn_zoom_out,
+        ]
+        for control in controls:
+            control.setEnabled(enabled)
 
     def _run_camera_action(self, action, success_message):
         def worker():
