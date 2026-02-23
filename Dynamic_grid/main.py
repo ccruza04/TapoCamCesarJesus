@@ -35,7 +35,12 @@ class MainWindow(QMainWindow):
         self.btn_add.clicked.connect(self.add_camera_dialog)
         vbox.addWidget(self.btn_add)
 
-        self.widgets = load_cameras()
+        self.btn_config = QPushButton("⚙️ Configuración pytapo")
+        self.btn_config.clicked.connect(self.open_settings_dialog)
+        vbox.addWidget(self.btn_config)
+
+        self.settings = load_settings()
+        self.widgets = load_cameras(self.settings)
         self.build_grid()
 
     def build_grid(self):
@@ -75,9 +80,34 @@ class MainWindow(QMainWindow):
 
         self.add_camera(mac.strip(), usuario.strip(), password)
 
+    def open_settings_dialog(self):
+        tapo_user, ok1 = QInputDialog.getText(
+            self,
+            "Configuración pytapo",
+            "Usuario / email de Tapo:",
+            text=self.settings.get("tapo_user", ""),
+        )
+        if not ok1:
+            return
+
+        tapo_password, ok2 = QInputDialog.getText(
+            self,
+            "Configuración pytapo",
+            "Password de Tapo:",
+            QLineEdit.EchoMode.Password,
+            self.settings.get("tapo_password", ""),
+        )
+        if not ok2:
+            return
+
+        self.settings = {"tapo_user": tapo_user.strip(), "tapo_password": tapo_password.strip()}
+        save_settings(self.settings)
+
+        for widget in self.widgets:
+            widget.feed.set_settings(self.settings)
+
     def add_camera(self, mac, usuario, password):
-        feed = CameraFeed(mac, usuario, password)
-        feed.start()
+        feed = CameraFeed(mac, usuario, password, settings=self.settings)
         widget = CameraWidget(feed)
         self.widgets.append(widget)
         self.build_grid()

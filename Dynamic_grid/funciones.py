@@ -48,7 +48,7 @@ def buscar_ip_por_mac(mac: str):
 
 # ---------------- CAMERA THREAD ----------------
 class CameraFeed(threading.Thread):
-    def __init__(self, mac, usuario, password):
+    def __init__(self, mac, usuario, password, settings=None):
         super().__init__(daemon=True)
         self.mac = mac
 
@@ -186,6 +186,36 @@ class CameraFeed(threading.Thread):
             return True
 
 
+    def set_settings(self, settings):
+        self.settings = settings
+
+    def get_tapo_client(self):
+        if not self.ip:
+            raise RuntimeError("La cámara todavía no tiene IP asignada")
+
+        tapo_user = self.settings.get("tapo_user", "").strip() or self.usuario
+        tapo_password = self.settings.get("tapo_password", "").strip() or self.password
+        return Tapo(self.ip, tapo_user, tapo_password)
+
+    def _call_first_available(self, client, method_names, *args):
+        for method_name in method_names:
+            method = getattr(client, method_name, None)
+            if callable(method):
+                return method(*args)
+        raise AttributeError(f"Ningún método disponible entre: {', '.join(method_names)}")
+
+    def move(self, x_axis, y_axis):
+        client = self.get_tapo_client()
+        self._call_first_available(client, ["moveMotor", "move_motor", "move"], x_axis, y_axis)
+
+    def zoom(self, zoom_in):
+        client = self.get_tapo_client()
+        if zoom_in:
+            self._call_first_available(client, ["zoomIn", "zoom_in"])
+        else:
+            self._call_first_available(client, ["zoomOut", "zoom_out"])
+
+
 # ---------------- CAMERA WIDGET ----------------
 class CameraWidget(QWidget):
     def __init__(self, feed):
@@ -215,7 +245,6 @@ class CameraWidget(QWidget):
         layout.addWidget(self.label, stretch=1)
         layout.addLayout(btns)
 
-        # doble click abre ventana independiente
         self.label.mouseDoubleClickEvent = self.open_window
         self.cam_window = None
 
@@ -281,11 +310,58 @@ class CameraWindow(QWidget):
     def __init__(self, feed):
         super().__init__()
         self.setWindowTitle(f"Cámara {feed.ip or feed.mac}")
-        self.resize(640, 480)
+        self.resize(760, 540)
         self.feed = feed
+
         self.label = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
+        self.status = QLabel("Controles PTZ listos")
+
         layout = QVBoxLayout(self)
-        layout.addWidget(self.label)
+        layout.addWidget(self.label, stretch=1)
+
+        controls_container = QWidget()
+        controls_layout = QGridLayout(controls_container)
+        controls_layout.setHorizontalSpacing(8)
+        controls_layout.setVerticalSpacing(8)
+
+        self.btn_up = QPushButton("▲")
+        self.btn_down = QPushButton("▼")
+        self.btn_left = QPushButton("◀")
+        self.btn_right = QPushButton("▶")
+        self.btn_center = QPushButton("●")
+
+        self.btn_zoom_in = QPushButton("Zoom +")
+        self.btn_zoom_out = QPushButton("Zoom -")
+
+        for btn in [
+            self.btn_up,
+            self.btn_down,
+            self.btn_left,
+            self.btn_right,
+            self.btn_center,
+            self.btn_zoom_in,
+            self.btn_zoom_out,
+        ]:
+            btn.setFixedSize(90, 34)
+
+        controls_layout.addWidget(self.btn_up, 0, 1)
+        controls_layout.addWidget(self.btn_left, 1, 0)
+        controls_layout.addWidget(self.btn_center, 1, 1)
+        controls_layout.addWidget(self.btn_right, 1, 2)
+        controls_layout.addWidget(self.btn_down, 2, 1)
+        controls_layout.addWidget(self.btn_zoom_in, 0, 3)
+        controls_layout.addWidget(self.btn_zoom_out, 1, 3)
+
+        layout.addWidget(controls_container, alignment=Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.status)
+
+        self.btn_up.clicked.connect(lambda: self.send_move(0, 1))
+        self.btn_down.clicked.connect(lambda: self.send_move(0, -1))
+        self.btn_left.clicked.connect(lambda: self.send_move(-1, 0))
+        self.btn_right.clicked.connect(lambda: self.send_move(1, 0))
+        self.btn_center.clicked.connect(lambda: self.send_move(0, 0))
+        self.btn_zoom_in.clicked.connect(lambda: self.send_zoom(True))
+        self.btn_zoom_out.clicked.connect(lambda: self.send_zoom(False))
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
@@ -329,7 +405,8 @@ def save_cameras(widgets):
         json.dump(cams_data, f, indent=4, ensure_ascii=False)
 
 
-def load_cameras():
+
+def load_cameras(settings=None):
     widgets = []
     data_file = Path(__file__).with_name("cameras.dat")
 
