@@ -1,5 +1,6 @@
 import cv2
 import json
+import hashlib
 import re
 import subprocess
 import threading
@@ -236,25 +237,53 @@ class CameraWidget(QWidget):
 
         self.label = QLabel("Conectando…", alignment=Qt.AlignmentFlag.AlignCenter)
         self.label.setObjectName("videoLabel")
+        self.label.setMinimumHeight(210)
+
+        self.header = QWidget()
+        self.header.setObjectName("cardHeader")
+
+        camera_name = f"Cámara {self.feed.mac[-5:]}"
+        self.header_title = QLabel(camera_name)
+        self.header_title.setObjectName("cardTitle")
+
+        self.header_subtitle = QLabel("Transmisión en vivo")
+        self.header_subtitle.setObjectName("cardSubtitle")
+
+        accent_seed = int(hashlib.sha1(camera_name.encode("utf-8")).hexdigest(), 16)
+        self.setProperty("accent", str(accent_seed % 8))
 
         self.status = QLabel("⏳ Iniciando…")
         self.status.setObjectName("statusLabel")
+
+        self.hint = QLabel("Doble clic en el video para abrir controles PTZ")
+        self.hint.setObjectName("cardHint")
+        self.hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.btn = QPushButton("⏺ Grabar")
         self.btn.clicked.connect(self.on_toggle_record)
 
         btns = QHBoxLayout()
+        btns.setContentsMargins(14, 0, 14, 0)
         btns.addStretch()
         btns.addWidget(self.btn)
         btns.addStretch()
 
+        header_layout = QVBoxLayout(self.header)
+        header_layout.setContentsMargins(14, 12, 14, 12)
+        header_layout.setSpacing(2)
+        header_layout.addWidget(self.header_title)
+        header_layout.addWidget(self.header_subtitle)
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(0, 0, 0, 12)
+        layout.setSpacing(10)
+        layout.addWidget(self.header)
         layout.addWidget(self.status)
         layout.addWidget(self.label, stretch=1)
+        layout.addWidget(self.hint)
         layout.addLayout(btns)
 
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.mouseDoubleClickEvent = self.open_window
         self.cam_window = None
 
@@ -298,7 +327,7 @@ class CameraWidget(QWidget):
             self.label.setPixmap(
                 QPixmap.fromImage(img).scaled(
                     self.label.size(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                     Qt.TransformationMode.SmoothTransformation,
                 )
             )
@@ -433,7 +462,7 @@ class CameraWindow(QWidget):
             self.label.setPixmap(
                 QPixmap.fromImage(img).scaled(
                     self.label.size(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                     Qt.TransformationMode.SmoothTransformation,
                 )
             )

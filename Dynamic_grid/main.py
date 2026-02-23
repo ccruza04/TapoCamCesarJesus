@@ -117,12 +117,24 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         root_layout = QVBoxLayout(central)
-        root_layout.setContentsMargins(12, 12, 12, 12)
-        root_layout.setSpacing(10)
+        root_layout.setContentsMargins(16, 14, 16, 14)
+        root_layout.setSpacing(12)
 
-        header_layout = QHBoxLayout()
+        top_layout = QHBoxLayout()
+        top_layout.setContentsMargins(4, 0, 4, 0)
+        top_layout.setSpacing(12)
+
+        title_wrap = QVBoxLayout()
+        title_wrap.setSpacing(2)
         self.title_label = QLabel("Panel de cámaras")
         self.title_label.setObjectName("headerTitle")
+        self.subtitle_label = QLabel("Supervisión en tiempo real")
+        self.subtitle_label.setObjectName("headerSubtitle")
+        title_wrap.addWidget(self.title_label)
+        title_wrap.addWidget(self.subtitle_label)
+
+        top_layout.addLayout(title_wrap)
+        top_layout.addStretch()
 
         self.counter_label = QLabel("0 cámaras")
         self.counter_label.setObjectName("headerCounter")
@@ -131,21 +143,23 @@ class MainWindow(QMainWindow):
         self.btn_add.setObjectName("primaryButton")
         self.btn_add.clicked.connect(self.add_camera_dialog)
 
-        self.btn_config = QPushButton("⚙️ Configuración Tapo")
+        self.btn_config = QPushButton("⚙️ Configuración")
         self.btn_config.clicked.connect(self.open_settings_dialog)
 
-        header_layout.addWidget(self.title_label)
-        header_layout.addStretch()
-        header_layout.addWidget(self.counter_label)
-        header_layout.addSpacing(8)
-        header_layout.addWidget(self.btn_config)
-        header_layout.addWidget(self.btn_add)
-        root_layout.addLayout(header_layout)
+        top_layout.addWidget(self.counter_label)
+        top_layout.addWidget(self.btn_config)
+        top_layout.addWidget(self.btn_add)
+        root_layout.addLayout(top_layout)
+
+        self.top_badge = QLabel("▦")
+        self.top_badge.setObjectName("topBadge")
+        self.top_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        root_layout.addWidget(self.top_badge, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         self.grid_host = QWidget()
         self.grid = QGridLayout(self.grid_host)
-        self.grid.setSpacing(12)
-        self.grid.setContentsMargins(2, 2, 2, 2)
+        self.grid.setSpacing(16)
+        self.grid.setContentsMargins(4, 4, 4, 4)
 
         self.empty_label = QLabel("No hay cámaras configuradas. Usa ‘Agregar cámara’ para comenzar.")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
