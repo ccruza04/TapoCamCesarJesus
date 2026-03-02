@@ -1,15 +1,23 @@
 import math
 import sys
+from pathlib import Path
 
-from PyQt6.QtCore import Qt
+import cv2
+from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtGui import QDesktopServices, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QDialog,
+    QFileDialog,
     QFormLayout,
+    QGroupBox,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -19,7 +27,236 @@ from PyQt6.QtWidgets import (
 )
 
 from estilos import APP_STYLE
-from funciones import CameraFeed, CameraWidget, load_cameras, load_settings, save_cameras, save_settings
+from funciones import CameraFeed, CameraWidget, load_cameras, load_settings, save_cameras, update_settings
+
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"}
+VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".webm", ".m4v"}
+
+
+class MediaPanel(QWidget):
+    def __init__(self, directory="", parent=None):
+        super().__init__(parent)
+        self.directory = directory
+        self.selection_mode = False
+
+        self.path_label = QLabel("Directorio actual: -")
+        self.path_label.setWordWrap(True)
+
+        self.media_list = QListWidget()
+        self.media_list.itemDoubleClicked.connect(self.open_item)
+        self.media_list.currentItemChanged.connect(self.update_preview)
+
+        self.preview_label = QLabel("Selecciona un archivo para previsualizar")
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_label.setMinimumHeight(240)
+        self.preview_label.setObjectName("videoLabel")
+
+        self.preview_info = QLabel("")
+        self.preview_info.setWordWrap(True)
+
+        self.btn_refresh = QPushButton("Refrescar")
+        self.btn_refresh.clicked.connect(self.load_media)
+
+        self.btn_delete = QPushButton("Borrar")
+        self.btn_delete.clicked.connect(self.delete_selected_item)
+
+        self.selection_checkbox = QCheckBox("Modo selección")
+        self.selection_checkbox.stateChanged.connect(self.toggle_selection_mode)
+
+        self.btn_delete_all = QPushButton("Borrar Todo")
+        self.btn_delete_all.setObjectName("primaryButton")
+        self.btn_delete_all.clicked.connect(self.delete_checked_items)
+        self.btn_delete_all.hide()
+
+        actions = QHBoxLayout()
+        actions.addWidget(self.btn_refresh)
+        actions.addWidget(self.btn_delete)
+        actions.addStretch()
+        actions.addWidget(self.selection_checkbox)
+        actions.addWidget(self.btn_delete_all)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.path_label)
+        layout.addLayout(actions)
+        layout.addWidget(self.media_list, stretch=1)
+        layout.addWidget(self.preview_label)
+        layout.addWidget(self.preview_info)
+
+        self.set_directory(directory)
+
+    def set_directory(self, directory):
+        self.directory = directory
+        self.load_media()
+
+    def _iter_media_files(self):
+        if not self.directory:
+            return []
+        base_path = Path(self.directory)
+        if not base_path.exists() or not base_path.is_dir():
+            return []
+        return sorted(
+            [p for p in base_path.iterdir() if p.is_file() and p.suffix.lower() in (IMAGE_EXTENSIONS | VIDEO_EXTENSIONS)],
+            key=lambda p: p.name.lower(),
+        )
+
+    def load_media(self):
+        self.path_label.setText(f"Directorio actual: {self.directory or 'No definido'}")
+        self.media_list.clear()
+        self.preview_label.setText("Selecciona un archivo para previsualizar")
+        self.preview_label.setPixmap(QPixmap())
+        self.preview_info.setText("")
+
+        if not self.directory:
+            self.media_list.addItem("Configura una ruta para visualizar archivos de media.")
+            return
+
+        base_path = Path(self.directory)
+        if not base_path.exists() or not base_path.is_dir():
+            self.media_list.addItem("La ruta no existe o no es un directorio válido.")
+            return
+
+        files = self._iter_media_files()
+        for media_file in files:
+            kind = "🎬" if media_file.suffix.lower() in VIDEO_EXTENSIONS else "🖼️"
+            item = QListWidgetItem(f"{kind} {media_file.name}")
+            item.setData(Qt.ItemDataRole.UserRole, str(media_file.resolve()))
+            if self.selection_mode:
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Unchecked)
+            self.media_list.addItem(item)
+
+        if not files:
+            self.media_list.addItem("No se encontraron fotos ni videos en la carpeta.")
+
+    def open_item(self, item):
+        media_path = item.data(Qt.ItemDataRole.UserRole)
+        if not media_path:
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(media_path))
+
+    def update_preview(self, current, _previous):
+        if current is None:
+            return
+
+        media_path = current.data(Qt.ItemDataRole.UserRole)
+        if not media_path:
+            self.preview_label.setText("Selecciona un archivo válido para previsualizar")
+            self.preview_label.setPixmap(QPixmap())
+            self.preview_info.setText("")
+            return
+
+        file_path = Path(media_path)
+        suffix = file_path.suffix.lower()
+        self.preview_info.setText(f"Archivo: {file_path.name}")
+
+        if suffix in IMAGE_EXTENSIONS:
+            pixmap = QPixmap(str(file_path))
+            if pixmap.isNull():
+                self.preview_label.setText("No se pudo cargar la imagen")
+                self.preview_label.setPixmap(QPixmap())
+                return
+            self.preview_label.setPixmap(
+                pixmap.scaled(
+                    self.preview_label.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+            return
+
+        if suffix in VIDEO_EXTENSIONS:
+            cap = cv2.VideoCapture(str(file_path))
+            ok, frame = cap.read()
+            cap.release()
+            if not ok or frame is None:
+                self.preview_label.setText("No se pudo obtener preview del video")
+                self.preview_label.setPixmap(QPixmap())
+                return
+
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            image = QImage(rgb.data, rgb.shape[1], rgb.shape[0], rgb.strides[0], QImage.Format.Format_RGB888)
+            self.preview_label.setPixmap(
+                QPixmap.fromImage(image).scaled(
+                    self.preview_label.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_preview(self.media_list.currentItem(), None)
+
+    def delete_selected_item(self):
+        current = self.media_list.currentItem()
+        if current is None:
+            QMessageBox.information(self, "Sin selección", "Selecciona un elemento para borrar.")
+            return
+
+        media_path = current.data(Qt.ItemDataRole.UserRole)
+        if not media_path:
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "Confirmar borrado",
+            "¿Seguro que quieres borrar este archivo?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        path = Path(media_path)
+        try:
+            path.unlink(missing_ok=False)
+        except FileNotFoundError:
+            QMessageBox.warning(self, "No encontrado", "El archivo ya no existe.")
+        except OSError as exc:
+            QMessageBox.critical(self, "Error", f"No se pudo borrar: {exc}")
+            return
+
+        self.load_media()
+
+    def toggle_selection_mode(self, state):
+        self.selection_mode = state == Qt.CheckState.Checked.value
+        self.btn_delete_all.setVisible(self.selection_mode)
+        self.load_media()
+
+    def delete_checked_items(self):
+        checked_paths = []
+        for i in range(self.media_list.count()):
+            item = self.media_list.item(i)
+            media_path = item.data(Qt.ItemDataRole.UserRole)
+            if not media_path:
+                continue
+            if item.checkState() == Qt.CheckState.Checked:
+                checked_paths.append(Path(media_path))
+
+        if not checked_paths:
+            QMessageBox.information(self, "Sin selección", "Marca al menos un elemento para borrar.")
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "Confirmar borrado múltiple",
+            f"¿Seguro que quieres borrar {len(checked_paths)} archivo(s)?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        errors = []
+        for path in checked_paths:
+            try:
+                path.unlink(missing_ok=False)
+            except OSError as exc:
+                errors.append(f"{path.name}: {exc}")
+
+        self.load_media()
+        if errors:
+            QMessageBox.warning(self, "Borrado parcial", "\n".join(errors))
+
 
 
 class AddCameraDialog(QDialog):
@@ -97,9 +334,12 @@ class MainWindow(QMainWindow):
 
         self._build_cameras_tab()
         self._build_settings_tab()
+        self._build_media_tab()
 
         self.settings = load_settings()
         self._load_settings_inputs(self.settings)
+        self._update_media_path_labels()
+        self.media_window = None
 
         self.widgets = load_cameras(self.settings)
         self.build_grid()
@@ -152,7 +392,7 @@ class MainWindow(QMainWindow):
         form.addRow("Usuario / email:", self.input_tapo_user)
         form.addRow("Password:", self.input_tapo_password)
 
-        self.btn_save_settings = QPushButton("Guardar configuración")
+        self.btn_save_settings = QPushButton("Guardar credenciales")
         self.btn_save_settings.setObjectName("primaryButton")
         self.btn_save_settings.clicked.connect(self.save_settings_from_tab)
 
@@ -160,9 +400,36 @@ class MainWindow(QMainWindow):
         actions.addStretch()
         actions.addWidget(self.btn_save_settings)
 
-        layout.addWidget(info)
-        layout.addLayout(form)
-        layout.addLayout(actions)
+        tapo_group = QGroupBox("Credenciales Tapo")
+        tapo_group_layout = QVBoxLayout(tapo_group)
+        tapo_group_layout.addWidget(info)
+        tapo_group_layout.addLayout(form)
+        tapo_group_layout.addLayout(actions)
+
+        self.input_media_directory = QLineEdit()
+        self.input_media_directory.setPlaceholderText("Selecciona una carpeta de fotos/videos")
+        self.btn_select_media_directory = QPushButton("Seleccionar carpeta")
+        self.btn_select_media_directory.clicked.connect(self.select_media_directory)
+
+        media_form = QFormLayout()
+        media_form.addRow("Ruta:", self.input_media_directory)
+
+        media_actions = QHBoxLayout()
+        media_actions.addWidget(self.btn_select_media_directory)
+        media_actions.addStretch()
+
+        self.btn_save_media_directory = QPushButton("Guardar ruta de media")
+        self.btn_save_media_directory.setObjectName("primaryButton")
+        self.btn_save_media_directory.clicked.connect(self.save_media_directory_from_tab)
+        media_actions.addWidget(self.btn_save_media_directory)
+
+        media_group = QGroupBox("Configuración de directorios")
+        media_group_layout = QVBoxLayout(media_group)
+        media_group_layout.addLayout(media_form)
+        media_group_layout.addLayout(media_actions)
+
+        layout.addWidget(tapo_group)
+        layout.addWidget(media_group)
         layout.addStretch()
 
         self.tabs.addTab(settings_tab, "Configuración")
@@ -170,6 +437,22 @@ class MainWindow(QMainWindow):
     def _load_settings_inputs(self, settings):
         self.input_tapo_user.setText(settings.get("tapo_user", ""))
         self.input_tapo_password.setText(settings.get("tapo_password", ""))
+        self.input_media_directory.setText(settings.get("media_directory", ""))
+
+    def _build_media_tab(self):
+        media_tab = QWidget()
+        layout = QVBoxLayout(media_tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        info = QLabel("Visualiza, previsualiza y borra fotos/videos del directorio configurado.")
+        info.setWordWrap(True)
+
+        self.media_panel = MediaPanel("")
+
+        layout.addWidget(info)
+        layout.addWidget(self.media_panel, stretch=1)
+
+        self.tabs.addTab(media_tab, "Media")
 
     def _refresh_header(self):
         n = len(self.widgets)
@@ -217,16 +500,49 @@ class MainWindow(QMainWindow):
         self.add_camera(mac, usuario, password)
 
     def save_settings_from_tab(self):
-        self.settings = {
+        tapo_settings = {
             "tapo_user": self.input_tapo_user.text().strip(),
             "tapo_password": self.input_tapo_password.text().strip(),
         }
-        save_settings(self.settings)
+        self.settings = update_settings(tapo_settings)
 
         for widget in self.widgets:
             widget.feed.set_settings(self.settings)
 
         self.statusBar().showMessage("Configuración de Tapo guardada", 3000)
+
+    def select_media_directory(self):
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "Seleccionar carpeta de media",
+            self.input_media_directory.text().strip() or str(Path.home()),
+        )
+        if selected:
+            self.input_media_directory.setText(selected)
+
+    def save_media_directory_from_tab(self):
+        media_directory = self.input_media_directory.text().strip()
+        self.settings = update_settings({"media_directory": media_directory})
+        self._update_media_path_labels()
+        if self.media_window is not None:
+            self.media_window.set_directory(media_directory)
+        self.statusBar().showMessage("Ruta de media guardada", 3000)
+
+    def _update_media_path_labels(self):
+        media_directory = self.settings.get("media_directory", "")
+        self.media_panel.set_directory(media_directory)
+
+    def open_media_window(self):
+        media_directory = self.settings.get("media_directory", "")
+        if self.media_window is None:
+            self.media_window = MediaPanel(media_directory)
+            self.media_window.setWindowTitle("Galería de media")
+            self.media_window.resize(800, 520)
+        else:
+            self.media_window.set_directory(media_directory)
+        self.media_window.show()
+        self.media_window.raise_()
+        self.media_window.activateWindow()
 
     def add_camera(self, mac, usuario, password):
         feed = CameraFeed(mac, usuario, password, settings=self.settings)
