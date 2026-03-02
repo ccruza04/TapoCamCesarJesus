@@ -82,6 +82,12 @@ class CameraFeed(threading.Thread):
         self.connected = False
         self.settings = settings or {}
 
+    def _get_media_output_dir(self):
+        configured_dir = str(self.settings.get("media_directory", "")).strip()
+        output_dir = Path(configured_dir) if configured_dir else Path(__file__).resolve().parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
+
     def run(self):
         self._connect_and_capture_loop()
 
@@ -170,9 +176,10 @@ class CameraFeed(threading.Thread):
         with self.writer_lock:
             if not self.recording and self.frame is not None:
                 h, w, _ = self.frame.shape
-                filename = f"grab_{self.ip or self.mac}_{int(time.time())}.mp4"
+                output_dir = self._get_media_output_dir()
+                filename = output_dir / f"grab_{self.ip or self.mac}_{int(time.time())}.mp4"
                 self.out = cv2.VideoWriter(
-                    filename,
+                    str(filename),
                     cv2.VideoWriter_fourcc(*"mp4v"),
                     RECORD_FPS,
                     (w, h),
@@ -191,6 +198,19 @@ class CameraFeed(threading.Thread):
                 self.out.release()
                 self.out = None
             return True
+
+    def capture_photo(self):
+        with self.capture_lock:
+            if self.frame is None:
+                return False, "Sin imagen disponible"
+            frame_copy = self.frame.copy()
+
+        output_dir = self._get_media_output_dir()
+        photo_path = output_dir / f"foto_{self.ip or self.mac}_{int(time.time())}.jpg"
+        saved = cv2.imwrite(str(photo_path), frame_copy)
+        if not saved:
+            return False, "No se pudo guardar la foto"
+        return True, str(photo_path)
 
 
     def set_settings(self, settings):
@@ -240,12 +260,16 @@ class CameraWidget(QWidget):
         self.status = QLabel("⏳ Iniciando…")
         self.status.setObjectName("statusLabel")
 
-        self.btn = QPushButton("⏺ Grabar")
-        self.btn.clicked.connect(self.on_toggle_record)
+        self.btn_record = QPushButton("⏺ Grabar")
+        self.btn_record.clicked.connect(self.on_toggle_record)
+
+        self.btn_capture = QPushButton("📸 Capturar")
+        self.btn_capture.clicked.connect(self.on_capture_photo)
 
         btns = QHBoxLayout()
         btns.addStretch()
-        btns.addWidget(self.btn)
+        btns.addWidget(self.btn_record)
+        btns.addWidget(self.btn_capture)
         btns.addStretch()
 
         layout = QVBoxLayout(self)
@@ -273,14 +297,21 @@ class CameraWidget(QWidget):
         ok = self.feed.toggle_record()
         if not ok:
             self.status.setText("❌ Error al iniciar grabación")
-            self.btn.setText("⏺ Grabar")
+            self.btn_record.setText("⏺ Grabar")
             return
 
         if self.feed.recording:
-            self.btn.setText("⏹ Detener")
+            self.btn_record.setText("⏹ Detener")
             self.status.setText("🔴 Grabando")
         else:
-            self.btn.setText("⏺ Grabar")
+            self.btn_record.setText("⏺ Grabar")
+
+    def on_capture_photo(self):
+        ok, message = self.feed.capture_photo()
+        if ok:
+            self.status.setText(f"📸 Foto guardada: {message}")
+        else:
+            self.status.setText(f"❌ {message}")
 
     def update_frame(self):
         if self.feed.frame is not None:
@@ -329,7 +360,17 @@ class CameraWindow(QWidget):
         self.status = QLabel("Controles PTZ listos")
         self.action_result.connect(self.status.setText)
 
+        self.btn_record = QPushButton("⏺ Grabar")
+        self.btn_capture = QPushButton("📸 Capturar")
+
         layout = QVBoxLayout(self)
+        media_actions = QHBoxLayout()
+        media_actions.addStretch()
+        media_actions.addWidget(self.btn_record)
+        media_actions.addWidget(self.btn_capture)
+        media_actions.addStretch()
+
+        layout.addLayout(media_actions)
         layout.addWidget(self.label, stretch=1)
 
         controls_container = QWidget()
@@ -378,6 +419,8 @@ class CameraWindow(QWidget):
         self.btn_center.clicked.connect(lambda: self.send_move(0, 0))
         self.btn_zoom_in.clicked.connect(lambda: self.send_zoom(True))
         self.btn_zoom_out.clicked.connect(lambda: self.send_zoom(False))
+        self.btn_record.clicked.connect(self.on_toggle_record)
+        self.btn_capture.clicked.connect(self.on_capture_photo)
 
         if Tapo is None:
             self._set_ptz_enabled(False)
@@ -416,6 +459,18 @@ class CameraWindow(QWidget):
     def send_zoom(self, zoom_in):
         message = "✅ Zoom + enviado" if zoom_in else "✅ Zoom - enviado"
         self._run_camera_action(lambda: self.feed.zoom(zoom_in), message)
+
+    def on_toggle_record(self):
+        ok = self.feed.toggle_record()
+        if not ok:
+            self.action_result.emit("❌ Error al iniciar grabación")
+            self.btn_record.setText("⏺ Grabar")
+            return
+        self.btn_record.setText("⏹ Detener" if self.feed.recording else "⏺ Grabar")
+
+    def on_capture_photo(self):
+        ok, message = self.feed.capture_photo()
+        self.action_result.emit(f"📸 Foto guardada: {message}" if ok else f"❌ {message}")
 
     def update_frame(self):
         if self.feed.frame is not None:
