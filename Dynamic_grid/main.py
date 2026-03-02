@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -64,48 +65,6 @@ class AddCameraDialog(QDialog):
         )
 
 
-class SettingsDialog(QDialog):
-    def __init__(self, settings, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Configuración de Tapo")
-        self.setModal(True)
-
-        self.input_tapo_user = QLineEdit(settings.get("tapo_user", ""))
-        self.input_tapo_user.setPlaceholderText("usuario@email.com")
-
-        self.input_tapo_password = QLineEdit(settings.get("tapo_password", ""))
-        self.input_tapo_password.setEchoMode(QLineEdit.EchoMode.Password)
-
-        info = QLabel("Estas credenciales se usan para mover y hacer zoom con pytapo.")
-        info.setWordWrap(True)
-
-        form = QFormLayout()
-        form.addRow("Usuario / email:", self.input_tapo_user)
-        form.addRow("Password:", self.input_tapo_password)
-
-        btn_cancel = QPushButton("Cancelar")
-        btn_cancel.clicked.connect(self.reject)
-        btn_ok = QPushButton("Guardar")
-        btn_ok.setObjectName("primaryButton")
-        btn_ok.clicked.connect(self.accept)
-
-        actions = QHBoxLayout()
-        actions.addStretch()
-        actions.addWidget(btn_cancel)
-        actions.addWidget(btn_ok)
-
-        layout = QVBoxLayout(self)
-        layout.addWidget(info)
-        layout.addLayout(form)
-        layout.addLayout(actions)
-
-    def get_settings(self):
-        return {
-            "tapo_user": self.input_tapo_user.text().strip(),
-            "tapo_password": self.input_tapo_password.text().strip(),
-        }
-
-
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -124,22 +83,8 @@ class MainWindow(QMainWindow):
         self.title_label = QLabel("Panel de cámaras")
         self.title_label.setObjectName("headerTitle")
 
-        self.counter_label = QLabel("0 cámaras")
-        self.counter_label.setObjectName("headerCounter")
-
-        self.btn_add = QPushButton("➕ Agregar cámara")
-        self.btn_add.setObjectName("primaryButton")
-        self.btn_add.clicked.connect(self.add_camera_dialog)
-
-        self.btn_config = QPushButton("⚙️ Configuración Tapo")
-        self.btn_config.clicked.connect(self.open_settings_dialog)
-
         header_layout.addWidget(self.title_label)
         header_layout.addStretch()
-        header_layout.addWidget(self.counter_label)
-        header_layout.addSpacing(8)
-        header_layout.addWidget(self.btn_config)
-        header_layout.addWidget(self.btn_add)
         root_layout.addLayout(header_layout)
 
         self.grid_host = QWidget()
@@ -147,17 +92,84 @@ class MainWindow(QMainWindow):
         self.grid.setSpacing(12)
         self.grid.setContentsMargins(2, 2, 2, 2)
 
+        self.tabs = QTabWidget()
+        root_layout.addWidget(self.tabs, stretch=1)
+
+        self._build_cameras_tab()
+        self._build_settings_tab()
+
+        self.settings = load_settings()
+        self._load_settings_inputs(self.settings)
+
+        self.widgets = load_cameras(self.settings)
+        self.build_grid()
+        self.statusBar().showMessage("Sistema listo")
+
+    def _build_cameras_tab(self):
+        cameras_tab = QWidget()
+        layout = QVBoxLayout(cameras_tab)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(10)
+
+        controls = QHBoxLayout()
+        self.counter_label = QLabel("0 cámaras")
+        self.counter_label.setObjectName("headerCounter")
+
+        self.btn_add = QPushButton("➕ Agregar cámara")
+        self.btn_add.setObjectName("primaryButton")
+        self.btn_add.clicked.connect(self.add_camera_dialog)
+
+        controls.addWidget(self.counter_label)
+        controls.addStretch()
+        controls.addWidget(self.btn_add)
+
         self.empty_label = QLabel("No hay cámaras configuradas. Usa ‘Agregar cámara’ para comenzar.")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setObjectName("emptyState")
 
-        root_layout.addWidget(self.empty_label)
-        root_layout.addWidget(self.grid_host, stretch=1)
+        layout.addLayout(controls)
+        layout.addWidget(self.empty_label)
+        layout.addWidget(self.grid_host, stretch=1)
 
-        self.settings = load_settings()
-        self.widgets = load_cameras(self.settings)
-        self.build_grid()
-        self.statusBar().showMessage("Sistema listo")
+        self.tabs.addTab(cameras_tab, "Cámaras")
+
+    def _build_settings_tab(self):
+        settings_tab = QWidget()
+        layout = QVBoxLayout(settings_tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(10)
+
+        info = QLabel("Estas credenciales se usan para mover y hacer zoom con pytapo.")
+        info.setWordWrap(True)
+
+        self.input_tapo_user = QLineEdit()
+        self.input_tapo_user.setPlaceholderText("usuario@email.com")
+
+        self.input_tapo_password = QLineEdit()
+        self.input_tapo_password.setEchoMode(QLineEdit.EchoMode.Password)
+
+        form = QFormLayout()
+        form.addRow("Usuario / email:", self.input_tapo_user)
+        form.addRow("Password:", self.input_tapo_password)
+
+        self.btn_save_settings = QPushButton("Guardar configuración")
+        self.btn_save_settings.setObjectName("primaryButton")
+        self.btn_save_settings.clicked.connect(self.save_settings_from_tab)
+
+        actions = QHBoxLayout()
+        actions.addStretch()
+        actions.addWidget(self.btn_save_settings)
+
+        layout.addWidget(info)
+        layout.addLayout(form)
+        layout.addLayout(actions)
+        layout.addStretch()
+
+        self.tabs.addTab(settings_tab, "Configuración")
+
+    def _load_settings_inputs(self, settings):
+        self.input_tapo_user.setText(settings.get("tapo_user", ""))
+        self.input_tapo_password.setText(settings.get("tapo_password", ""))
 
     def _refresh_header(self):
         n = len(self.widgets)
@@ -204,12 +216,11 @@ class MainWindow(QMainWindow):
 
         self.add_camera(mac, usuario, password)
 
-    def open_settings_dialog(self):
-        dialog = SettingsDialog(self.settings, self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        self.settings = dialog.get_settings()
+    def save_settings_from_tab(self):
+        self.settings = {
+            "tapo_user": self.input_tapo_user.text().strip(),
+            "tapo_password": self.input_tapo_password.text().strip(),
+        }
         save_settings(self.settings)
 
         for widget in self.widgets:
