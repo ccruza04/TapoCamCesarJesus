@@ -4,6 +4,7 @@ import re
 import subprocess
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote, unquote
 
@@ -87,6 +88,11 @@ class CameraFeed(threading.Thread):
         output_dir = Path(configured_dir) if configured_dir else Path(__file__).resolve().parent
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir
+
+    def _build_media_filename(self, prefix, extension):
+        camera_id = (self.ip or self.mac or "camara").replace(":", "-")
+        captured_at = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"{prefix}_{camera_id}_{captured_at}.{extension}"
 
     def run(self):
         self._connect_and_capture_loop()
@@ -177,7 +183,7 @@ class CameraFeed(threading.Thread):
             if not self.recording and self.frame is not None:
                 h, w, _ = self.frame.shape
                 output_dir = self._get_media_output_dir()
-                filename = output_dir / f"grab_{self.ip or self.mac}_{int(time.time())}.mp4"
+                filename = output_dir / self._build_media_filename("video", "mp4")
                 self.out = cv2.VideoWriter(
                     str(filename),
                     cv2.VideoWriter_fourcc(*"mp4v"),
@@ -206,7 +212,7 @@ class CameraFeed(threading.Thread):
             frame_copy = self.frame.copy()
 
         output_dir = self._get_media_output_dir()
-        photo_path = output_dir / f"foto_{self.ip or self.mac}_{int(time.time())}.jpg"
+        photo_path = output_dir / self._build_media_filename("foto", "jpg")
         saved = cv2.imwrite(str(photo_path), frame_copy)
         if not saved:
             return False, "No se pudo guardar la foto"
