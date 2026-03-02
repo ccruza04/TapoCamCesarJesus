@@ -99,4 +99,26 @@ QLabel#emptyState {
 QStatusBar {
     background: rgba(255, 255, 255, 0.55);
 }
+QTabWidget::pane {
+    border: 1px solid rgba(255, 255, 255, 0.85);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.48);
+    top: -1px;
+}
+
+QTabBar::tab {
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.9);
+    border-bottom: none;
+    padding: 8px 14px;
+    margin-right: 6px;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+    font-weight: 600;
+}
+
+QTabBar::tab:selected {
+    background: rgba(219, 234, 254, 0.95);
+}
+
 """
