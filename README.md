@@ -39,7 +39,7 @@ pip install PyQt6 pytapo
 1. Ejecuta el script principal: 
 
 ```bash
-python tu_script.py
+python main.py
 ```
 
 2. La ventana principal mostrará un panel donde puedes agregar cámaras, configurar credenciales globales y gestionar tus cámaras.
