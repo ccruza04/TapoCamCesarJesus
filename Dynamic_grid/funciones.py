@@ -446,6 +446,13 @@ def save_settings(settings):
         json.dump(settings, f, indent=4, ensure_ascii=False)
 
 
+def update_settings(partial_settings):
+    current_settings = load_settings()
+    current_settings.update(partial_settings)
+    save_settings(current_settings)
+    return current_settings
+
+
 def load_settings():
     settings_file = Path(__file__).with_name(SETTINGS_FILE)
 
@@ -456,13 +463,14 @@ def load_settings():
                 return {
                     "tapo_user": str(data.get("tapo_user", "")),
                     "tapo_password": str(data.get("tapo_password", "")),
+                    "media_directory": str(data.get("media_directory", "")),
                 }
     except FileNotFoundError:
         pass
     except json.JSONDecodeError:
         pass
 
-    return {"tapo_user": "", "tapo_password": ""}
+    return {"tapo_user": "", "tapo_password": "", "media_directory": ""}
 
 
 def save_cameras(widgets):
