@@ -73,10 +73,3 @@ python main.py
 
 ---
 
-## Licencia
-
-Este proyecto es de uso personal y educativo. Modifícalo y extiéndelo según tus necesidades.
-
----
-
-¿Quieres que te prepare también un ejemplo de estructura de archivos o algún apartado adicional?
