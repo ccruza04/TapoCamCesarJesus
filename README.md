@@ -12,6 +12,7 @@ Este proyecto es una interfaz gráfica para gestionar cámaras de CCTV Tapo, des
 - Configurar credenciales globales de Tapo.
 - Visualización en cuadrícula responsiva de múltiples cámaras.
 - Vista ampliada de la cámara con opción a tomar fotos.
+- Seguimiento automático de mano + grabación por gesto “pistola” en bloques de 30s.
 - Persistencia de configuraciones y cámaras agregadas.
 - Interfaz amigable y adaptable.
 
@@ -22,12 +23,13 @@ Este proyecto es una interfaz gráfica para gestionar cámaras de CCTV Tapo, des
 - Python 3.8+
 - PyQt6
 - pytapo (para control de cámaras Tapo)
+- mediapipe (detección de mano y gesto pistola)
 - Otros módulos necesarios (como `math`, `sys`)
 
 Para instalar las dependencias:
 
 ```bash
-pip install PyQt6 pytapo
+pip install PyQt6 pytapo mediapipe opencv-python
 ```
 
 ---
