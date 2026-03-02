@@ -32,6 +32,8 @@ GESTURE_FRAME_SKIP = 3
 GESTURE_PROCESS_INTERVAL = 1 / 12
 TRACK_DEAD_ZONE = 0.08
 TRACK_MAX_STEP = 2
+PAN_STEP = 10
+TILT_STEP = 10
 PING_TIMEOUT_MS = 400
 CONNECTION_CHECK_INTERVAL_MS = 60_000
 SETTINGS_FILE = "settings.json"
@@ -142,11 +144,11 @@ class AutoTracker:
         self.feed = feed
         self.last_command_ts = 0.0
 
-    def _axis_step(self, delta):
-        scaled = int(round((delta / 0.5) * TRACK_MAX_STEP))
+    def _scaled_motor_step(self, delta, axis_step):
+        scaled = int(round((delta / 0.5) * axis_step))
         if scaled == 0:
             return 0
-        return max(-TRACK_MAX_STEP, min(TRACK_MAX_STEP, scaled))
+        return max(-axis_step, min(axis_step, scaled))
 
     def update(self, index_tip):
         if index_tip is None:
@@ -161,8 +163,16 @@ class AutoTracker:
         if abs(dx) <= TRACK_DEAD_ZONE and abs(dy) <= TRACK_DEAD_ZONE:
             return
 
-        x_step = self._axis_step(dx)
-        y_step = self._axis_step(-dy)
+        # Referencia directa al esquema del código aportado:
+        # tapo.moveMotor(PAN_STEP, 0) / tapo.moveMotor(0, TILT_STEP)
+        x_step = self._scaled_motor_step(dx, PAN_STEP)
+        y_step = self._scaled_motor_step(-dy, TILT_STEP)
+
+        if abs(x_step) <= TRACK_MAX_STEP:
+            x_step = 0
+        if abs(y_step) <= TRACK_MAX_STEP:
+            y_step = 0
+
         if x_step == 0 and y_step == 0:
             return
 
@@ -521,6 +531,10 @@ class CameraFeed(threading.Thread):
         else:
             self._call_first_available(client, ["zoomOut", "zoom_out"])
 
+    def move_to_coordinates(self, pan, tilt):
+        client = self.get_tapo_client()
+        self._call_first_available(client, ["pan_tilt_to", "panTiltTo"], pan, tilt)
+
 
 # ---------------- CAMERA WIDGET ----------------
 class CameraWidget(QWidget):
@@ -694,10 +708,10 @@ class CameraWindow(QWidget):
         layout.addWidget(controls_container, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.status)
 
-        self.btn_up.clicked.connect(lambda: self.send_move(0, 1))
-        self.btn_down.clicked.connect(lambda: self.send_move(0, -1))
-        self.btn_left.clicked.connect(lambda: self.send_move(-1, 0))
-        self.btn_right.clicked.connect(lambda: self.send_move(1, 0))
+        self.btn_up.clicked.connect(lambda: self.send_move(0, TILT_STEP))
+        self.btn_down.clicked.connect(lambda: self.send_move(0, -TILT_STEP))
+        self.btn_left.clicked.connect(lambda: self.send_move(-PAN_STEP, 0))
+        self.btn_right.clicked.connect(lambda: self.send_move(PAN_STEP, 0))
         self.btn_center.clicked.connect(lambda: self.send_move(0, 0))
         self.btn_zoom_in.clicked.connect(lambda: self.send_zoom(True))
         self.btn_zoom_out.clicked.connect(lambda: self.send_zoom(False))
