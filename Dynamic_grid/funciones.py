@@ -507,8 +507,10 @@ class CameraFeed(threading.Thread):
             raise RuntimeError("La cámara todavía no tiene IP asignada")
 
         # Igual que el código de referencia: Tapo(IP, EMAIL, PASSWORD)
-        tapo_user = str(self.settings.get("tapo_user", ""))
-        tapo_password = str(self.settings.get("tapo_password", ""))
+        #tapo_user = str(self.settings.get("tapo_user", ""))
+        tapo_user = "cepy01.2026@gmail.com"
+        #tapo_password = str(self.settings.get("tapo_password", ""))
+        tapo_password = "Castelar2026"
 
         if not tapo_user or not tapo_password:
             raise RuntimeError(
