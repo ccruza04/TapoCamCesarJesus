@@ -262,19 +262,24 @@ class MediaPanel(QWidget):
 
 
 class AddCameraDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, title="Agregar cámara", submit_text="Guardar", initial_values=None):
         super().__init__(parent)
-        self.setWindowTitle("Agregar cámara")
+        self.setWindowTitle(title)
         self.setModal(True)
+
+        initial_values = initial_values or {}
 
         self.input_mac = QLineEdit()
         self.input_mac.setPlaceholderText("AA:BB:CC:DD:EE:FF")
+        self.input_mac.setText(initial_values.get("mac", ""))
 
         self.input_user = QLineEdit()
         self.input_user.setPlaceholderText("admin")
+        self.input_user.setText(initial_values.get("usuario", ""))
 
         self.input_password = QLineEdit()
         self.input_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.input_password.setText(initial_values.get("password", ""))
 
         form = QFormLayout()
         form.addRow("MAC:", self.input_mac)
@@ -283,11 +288,12 @@ class AddCameraDialog(QDialog):
 
         self.input_tag = QLineEdit()
         self.input_tag.setPlaceholderText("Entrada, Bodega, Patio...")
+        self.input_tag.setText(initial_values.get("tag", ""))
         form.addRow("Tag:", self.input_tag)
 
         btn_cancel = QPushButton("Cancelar")
         btn_cancel.clicked.connect(self.reject)
-        btn_ok = QPushButton("Guardar")
+        btn_ok = QPushButton(submit_text)
         btn_ok.setObjectName("primaryButton")
         btn_ok.clicked.connect(self.accept)
 
@@ -310,11 +316,13 @@ class AddCameraDialog(QDialog):
 
 
 class CameraListPanel(QWidget):
-    HEADERS = ["MAC", "IP", "Usuario RTSP", "Contraseña RTSP", "Tag"]
+    HEADERS = ["MAC", "IP", "Usuario RTSP", "Contraseña RTSP", "Tag", "Acciones"]
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, on_edit=None, on_delete=None):
         super().__init__(parent)
         self._widgets = []
+        self._on_edit = on_edit
+        self._on_delete = on_delete
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Buscar por tag, IP o MAC")
@@ -356,6 +364,20 @@ class CameraListPanel(QWidget):
                 item = QTableWidgetItem(value)
                 self.table.setItem(row, col, item)
 
+            actions_widget = QWidget()
+            actions_layout = QHBoxLayout(actions_widget)
+            actions_layout.setContentsMargins(0, 0, 0, 0)
+            actions_layout.setSpacing(6)
+
+            btn_edit = QPushButton("Modificar")
+            btn_edit.clicked.connect(lambda _checked=False, w=widget: self._trigger_edit(w))
+            btn_delete = QPushButton("Borrar")
+            btn_delete.clicked.connect(lambda _checked=False, w=widget: self._trigger_delete(w))
+
+            actions_layout.addWidget(btn_edit)
+            actions_layout.addWidget(btn_delete)
+            self.table.setCellWidget(row, len(self.HEADERS) - 1, actions_widget)
+
         self.table.resizeColumnsToContents()
         self.table.setSortingEnabled(True)
         self._apply_filters()
@@ -367,6 +389,14 @@ class CameraListPanel(QWidget):
             ip_item = self.table.item(row, 1)
             if ip_item is not None:
                 ip_item.setText(widget.feed.ip or "")
+
+    def _trigger_edit(self, widget):
+        if callable(self._on_edit):
+            self._on_edit(widget)
+
+    def _trigger_delete(self, widget):
+        if callable(self._on_delete):
+            self._on_delete(widget)
 
     def _apply_filters(self):
         query = self.search_input.text().strip().lower()
@@ -542,7 +572,7 @@ class MainWindow(QMainWindow):
         info = QLabel("Listado consolidado de cámaras configuradas.")
         info.setWordWrap(True)
 
-        self.camera_list_panel = CameraListPanel()
+        self.camera_list_panel = CameraListPanel(on_edit=self.edit_camera_dialog, on_delete=self.delete_camera_with_confirmation)
 
         layout.addWidget(info)
         layout.addWidget(self.camera_list_panel, stretch=1)
@@ -594,6 +624,29 @@ class MainWindow(QMainWindow):
             return
 
         self.add_camera(mac, usuario, password, tag)
+
+    def edit_camera_dialog(self, widget):
+        feed = widget.feed
+        dialog = AddCameraDialog(
+            self,
+            title="Modificar cámara",
+            submit_text="Guardar cambios",
+            initial_values={
+                "mac": feed.mac,
+                "usuario": feed.usuario_raw,
+                "password": feed.password_raw,
+                "tag": feed.tag,
+            },
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        mac, usuario, password, tag = dialog.get_values()
+        if not mac or not usuario or not password:
+            QMessageBox.warning(self, "Datos incompletos", "Completa MAC, usuario y password.")
+            return
+
+        self.update_camera(widget, mac, usuario, password, tag)
 
     def save_settings_from_tab(self):
         tapo_settings = {
@@ -648,6 +701,51 @@ class MainWindow(QMainWindow):
         self.build_grid()
         save_cameras(self.widgets)
         self.statusBar().showMessage(f"Cámara {mac} agregada", 3000)
+
+    def update_camera(self, widget, mac, usuario, password, tag=""):
+        if widget not in self.widgets:
+            return
+
+        index = self.widgets.index(widget)
+        previous_mac = widget.feed.mac
+        widget.feed.stop()
+        if widget.cam_window is not None:
+            widget.cam_window.close()
+            widget.cam_window = None
+        widget.deleteLater()
+
+        new_feed = CameraFeed(mac, usuario, password, tag=tag, settings=self.settings)
+        new_feed.start()
+        self.widgets[index] = CameraWidget(new_feed)
+
+        self.build_grid()
+        save_cameras(self.widgets)
+        self.statusBar().showMessage(f"Cámara {previous_mac} actualizada", 3000)
+
+    def delete_camera_with_confirmation(self, widget):
+        if widget not in self.widgets:
+            return
+
+        feed = widget.feed
+        confirm = QMessageBox.question(
+            self,
+            "Confirmar borrado",
+            f"¿Seguro que quieres borrar la cámara {feed.mac}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        widget.feed.stop()
+        if widget.cam_window is not None:
+            widget.cam_window.close()
+            widget.cam_window = None
+        self.widgets.remove(widget)
+        widget.deleteLater()
+
+        self.build_grid()
+        save_cameras(self.widgets)
+        self.statusBar().showMessage(f"Cámara {feed.mac} borrada", 3000)
 
     def timerEvent(self, event):
         if event.timerId() == self.table_refresh_timer:
