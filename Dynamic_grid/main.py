@@ -22,6 +22,8 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -279,6 +281,10 @@ class AddCameraDialog(QDialog):
         form.addRow("Usuario:", self.input_user)
         form.addRow("Password:", self.input_password)
 
+        self.input_tag = QLineEdit()
+        self.input_tag.setPlaceholderText("Entrada, Bodega, Patio...")
+        form.addRow("Tag:", self.input_tag)
+
         btn_cancel = QPushButton("Cancelar")
         btn_cancel.clicked.connect(self.reject)
         btn_ok = QPushButton("Guardar")
@@ -299,7 +305,78 @@ class AddCameraDialog(QDialog):
             self.input_mac.text().strip(),
             self.input_user.text().strip(),
             self.input_password.text(),
+            self.input_tag.text().strip(),
         )
+
+
+class CameraListPanel(QWidget):
+    HEADERS = ["MAC", "IP", "Usuario RTSP", "Contraseña RTSP", "Tag"]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._widgets = []
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Buscar por tag, IP o MAC")
+        self.search_input.textChanged.connect(self._apply_filters)
+
+        self.table = QTableWidget(0, len(self.HEADERS))
+        self.table.setHorizontalHeaderLabels(self.HEADERS)
+        self.table.setSortingEnabled(True)
+        self.table.setAlternatingRowColors(True)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setStretchLastSection(True)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.search_input)
+        layout.addWidget(self.table, stretch=1)
+
+    def set_widgets(self, widgets):
+        self._widgets = widgets
+        self._reload()
+
+    def _reload(self):
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(0)
+
+        for row, widget in enumerate(self._widgets):
+            feed = widget.feed
+            self.table.insertRow(row)
+            values = [
+                feed.mac or "",
+                feed.ip or "",
+                feed.usuario_raw or "",
+                feed.password_raw or "",
+                feed.tag or "",
+            ]
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                self.table.setItem(row, col, item)
+
+        self.table.resizeColumnsToContents()
+        self.table.setSortingEnabled(True)
+        self._apply_filters()
+
+    def refresh_dynamic_values(self):
+        for row, widget in enumerate(self._widgets):
+            if row >= self.table.rowCount():
+                break
+            ip_item = self.table.item(row, 1)
+            if ip_item is not None:
+                ip_item.setText(widget.feed.ip or "")
+
+    def _apply_filters(self):
+        query = self.search_input.text().strip().lower()
+
+        for row in range(self.table.rowCount()):
+            mac = (self.table.item(row, 0).text() if self.table.item(row, 0) else "").lower()
+            ip = (self.table.item(row, 1).text() if self.table.item(row, 1) else "").lower()
+            tag = (self.table.item(row, 4).text() if self.table.item(row, 4) else "").lower()
+            visible = not query or query in mac or query in ip or query in tag
+            self.table.setRowHidden(row, not visible)
 
 
 class MainWindow(QMainWindow):
@@ -333,8 +410,9 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self.tabs, stretch=1)
 
         self._build_cameras_tab()
-        self._build_settings_tab()
         self._build_media_tab()
+        self._build_camera_list_tab()
+        self._build_settings_tab()
 
         self.settings = load_settings()
         self._load_settings_inputs(self.settings)
@@ -344,6 +422,8 @@ class MainWindow(QMainWindow):
         self.widgets = load_cameras(self.settings)
         self.build_grid()
         self.statusBar().showMessage("Sistema listo")
+
+        self.table_refresh_timer = self.startTimer(2000)
 
     def _build_cameras_tab(self):
         cameras_tab = QWidget()
@@ -371,7 +451,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.empty_label)
         layout.addWidget(self.grid_host, stretch=1)
 
-        self.tabs.addTab(cameras_tab, "Cámaras")
+        self.tabs.addTab(cameras_tab, "Camaras")
 
     def _build_settings_tab(self):
         settings_tab = QWidget()
@@ -452,7 +532,22 @@ class MainWindow(QMainWindow):
         layout.addWidget(info)
         layout.addWidget(self.media_panel, stretch=1)
 
-        self.tabs.addTab(media_tab, "Media")
+        self.tabs.addTab(media_tab, "Multimedia")
+
+    def _build_camera_list_tab(self):
+        list_tab = QWidget()
+        layout = QVBoxLayout(list_tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        info = QLabel("Listado consolidado de cámaras configuradas.")
+        info.setWordWrap(True)
+
+        self.camera_list_panel = CameraListPanel()
+
+        layout.addWidget(info)
+        layout.addWidget(self.camera_list_panel, stretch=1)
+
+        self.tabs.addTab(list_tab, "Listado de cámaras")
 
     def _refresh_header(self):
         n = len(self.widgets)
@@ -466,6 +561,7 @@ class MainWindow(QMainWindow):
 
         n = len(self.widgets)
         self._refresh_header()
+        self.camera_list_panel.set_widgets(self.widgets)
 
         if n == 0:
             self.empty_label.show()
@@ -492,12 +588,12 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
-        mac, usuario, password = dialog.get_values()
+        mac, usuario, password, tag = dialog.get_values()
         if not mac or not usuario or not password:
             QMessageBox.warning(self, "Datos incompletos", "Completa MAC, usuario y password.")
             return
 
-        self.add_camera(mac, usuario, password)
+        self.add_camera(mac, usuario, password, tag)
 
     def save_settings_from_tab(self):
         tapo_settings = {
@@ -544,14 +640,20 @@ class MainWindow(QMainWindow):
         self.media_window.raise_()
         self.media_window.activateWindow()
 
-    def add_camera(self, mac, usuario, password):
-        feed = CameraFeed(mac, usuario, password, settings=self.settings)
+    def add_camera(self, mac, usuario, password, tag=""):
+        feed = CameraFeed(mac, usuario, password, tag=tag, settings=self.settings)
         feed.start()
         widget = CameraWidget(feed)
         self.widgets.append(widget)
         self.build_grid()
         save_cameras(self.widgets)
         self.statusBar().showMessage(f"Cámara {mac} agregada", 3000)
+
+    def timerEvent(self, event):
+        if event.timerId() == self.table_refresh_timer:
+            self.camera_list_panel.refresh_dynamic_values()
+        else:
+            super().timerEvent(event)
 
     def closeEvent(self, event):
         for widget in self.widgets:

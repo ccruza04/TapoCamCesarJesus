@@ -120,5 +120,20 @@ QTabBar::tab {
 QTabBar::tab:selected {
     background: rgba(219, 234, 254, 0.95);
 }
+QTableWidget {
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.9);
+    border-radius: 10px;
+    gridline-color: rgba(148, 163, 184, 0.35);
+    selection-background-color: rgba(37, 99, 235, 0.22);
+}
+
+QHeaderView::section {
+    background: rgba(219, 234, 254, 0.9);
+    border: none;
+    border-right: 1px solid rgba(191, 219, 254, 0.9);
+    padding: 6px;
+    font-weight: 700;
+}
 
 """
