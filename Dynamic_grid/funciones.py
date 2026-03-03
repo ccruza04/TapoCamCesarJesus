@@ -526,7 +526,9 @@ class CameraFeed(threading.Thread):
 
     def move(self, x_axis, y_axis):
         client = self.get_tapo_client()
-        self._call_first_available(client, ["moveMotor", "move_motor", "move"], x_axis, y_axis)
+        # Igual que el código de referencia:
+        # tapo.moveMotor(0, TILT_STEP), tapo.moveMotor(PAN_STEP, 0)
+        client.moveMotor(x_axis, y_axis)
 
     def zoom(self, zoom_in):
         client = self.get_tapo_client()
