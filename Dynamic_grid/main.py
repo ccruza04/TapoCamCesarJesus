@@ -501,8 +501,8 @@ class MainWindow(QMainWindow):
 
     def save_settings_from_tab(self):
         tapo_settings = {
-            "tapo_user": self.input_tapo_user.text().strip(),
-            "tapo_password": self.input_tapo_password.text().strip(),
+            "tapo_user": self.input_tapo_user.text(),
+            "tapo_password": self.input_tapo_password.text(),
         }
         self.settings = update_settings(tapo_settings)
 

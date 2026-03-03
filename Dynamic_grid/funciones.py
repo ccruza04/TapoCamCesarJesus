@@ -6,7 +6,6 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote, unquote
 
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
@@ -235,11 +234,8 @@ class VideoRecorder:
 
 
 def _decode_if_needed(value: str) -> str:
-    """Permite cargar credenciales antiguas ya codificadas sin romper el login."""
-    try:
-        return unquote(value)
-    except Exception:
-        return value
+    """Mantiene credenciales/tokens tal cual fueron ingresados."""
+    return value
 
 
 # ---------------- BUSCAR IP ----------------
@@ -273,8 +269,9 @@ class CameraFeed(threading.Thread):
         self.usuario_raw = _decode_if_needed(usuario)
         self.password_raw = _decode_if_needed(password)
 
-        self.usuario = quote(self.usuario_raw, safe="")
-        self.password = quote(self.password_raw, safe="")
+        # Enviar credenciales RTSP con caracteres especiales tal cual (sin URL-encoding).
+        self.usuario = self.usuario_raw
+        self.password = self.password_raw
         self.ip = None
         self.rtsp_url = None
         self.frame = None
@@ -510,8 +507,8 @@ class CameraFeed(threading.Thread):
             raise RuntimeError("La cámara todavía no tiene IP asignada")
 
         # Igual que el código de referencia: Tapo(IP, EMAIL, PASSWORD)
-        tapo_user = str(self.settings.get("tapo_user", "")).strip()
-        tapo_password = str(self.settings.get("tapo_password", "")).strip()
+        tapo_user = str(self.settings.get("tapo_user", ""))
+        tapo_password = str(self.settings.get("tapo_password", ""))
 
         if not tapo_user or not tapo_password:
             raise RuntimeError(
