@@ -55,9 +55,10 @@ def buscar_ip_por_mac(mac: str):
 
 # ---------------- CAMERA THREAD ----------------
 class CameraFeed(threading.Thread):
-    def __init__(self, mac, usuario, password, settings=None):
+    def __init__(self, mac, usuario, password, tag="", settings=None):
         super().__init__(daemon=True, name=f"CameraStream-{mac}")
         self.mac = mac
+        self.tag = tag
 
         # Guardamos versiones sin codificar para persistencia
         self.usuario_raw = _decode_if_needed(usuario)
@@ -541,6 +542,7 @@ def save_cameras(widgets):
             "mac": w.feed.mac,
             "usuario": w.feed.usuario_raw,
             "password": w.feed.password_raw,
+            "tag": w.feed.tag,
         }
         cams_data.append(cam)
 
@@ -558,7 +560,13 @@ def load_cameras(settings=None):
         with data_file.open("r", encoding="utf-8") as f:
             cams_data = json.load(f)
             for cam in cams_data:
-                feed = CameraFeed(cam["mac"], cam["usuario"], cam["password"], settings=settings)
+                feed = CameraFeed(
+                    cam["mac"],
+                    cam["usuario"],
+                    cam["password"],
+                    tag=cam.get("tag", ""),
+                    settings=settings,
+                )
                 feed.start()
                 widget = CameraWidget(feed)
                 widgets.append(widget)
