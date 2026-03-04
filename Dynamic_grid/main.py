@@ -336,7 +336,8 @@ class CameraListPanel(QWidget):
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setMinimumSectionSize(12)
+        self.table.verticalHeader().setMinimumSectionSize(36)
+        self.table.verticalHeader().setDefaultSectionSize(40)
         self.table.horizontalHeader().setStretchLastSection(True)
 
         layout = QVBoxLayout(self)
