@@ -1,4 +1,14 @@
-import cv2
+"""Módulo de utilidades de cámaras.
+
+Este archivo concentra la lógica de:
+- conexión RTSP de cada cámara,
+- captura de foto y grabación de video,
+- controles PTZ (si `pytapo` está disponible),
+- persistencia de configuración y listado de cámaras.
+"""
+
+from __future__ import annotations
+
 import json
 import re
 import subprocess
@@ -8,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote, unquote
 
+import cv2
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
@@ -18,558 +29,497 @@ except ModuleNotFoundError:
     Tapo = None
 
 RED_BASE = "192.168.60."
-RECORD_FPS = 15
-PING_TIMEOUT_MS = 400
-CONNECTION_CHECK_INTERVAL_MS = 60_000
-SETTINGS_FILE = "settings.json"
+TIEMPO_PING_MS = 400
+FPS_GRABACION = 15
+INTERVALO_VERIFICACION_MS = 60_000
+ARCHIVO_CONFIGURACION = "settings.json"
+ARCHIVO_CAMARAS = "cameras.dat"
 
 
-def _decode_if_needed(value: str) -> str:
-    """Permite cargar credenciales antiguas ya codificadas sin romper el login."""
+def decodificar_si_corresponde(valor: str) -> str:
+    """Devuelve una cadena decodificada en URL si aplica."""
     try:
-        return unquote(value)
+        return unquote(valor)
     except Exception:
-        return value
+        return valor
 
 
-# ---------------- BUSCAR IP ----------------
-def buscar_ip_por_mac(mac: str):
-    """Búsqueda de IP por MAC usando ping corto + ARP."""
-    mac = mac.lower().replace(":", "-")
-    for i in range(1, 255):
-        ip = f"{RED_BASE}{i}"
+def buscar_ip_por_mac(mac: str) -> str | None:
+    """Busca la IP de una MAC usando `ping` y `arp` (en entorno Windows)."""
+    mac_normalizada = mac.lower().replace(":", "-")
+    for host in range(1, 255):
+        ip = f"{RED_BASE}{host}"
         subprocess.call(
-            f"ping -n 1 -w {PING_TIMEOUT_MS} {ip}",
+            f"ping -n 1 -w {TIEMPO_PING_MS} {ip}",
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             shell=True,
         )
         salida = subprocess.check_output("arp -a", shell=True).decode("cp1252", errors="ignore")
         for linea in salida.splitlines():
-            if mac in linea.lower():
-                encontrada = re.findall(r"\d+\.\d+\.\d+\.\d+", linea)
-                if encontrada:
-                    return encontrada[0]
+            if mac_normalizada in linea.lower():
+                ips = re.findall(r"\d+\.\d+\.\d+\.\d+", linea)
+                if ips:
+                    return ips[0]
     return None
 
 
-# ---------------- CAMERA THREAD ----------------
-class CameraFeed(threading.Thread):
-    def __init__(self, mac, usuario, password, tag="", settings=None):
-        super().__init__(daemon=True, name=f"CameraStream-{mac}")
+class HiloCamara(threading.Thread):
+    """Gestiona la conexión de una cámara y mantiene el último frame en memoria."""
+
+    def __init__(self, mac: str, usuario: str, password: str, etiqueta: str = "", ajustes: dict | None = None):
+        super().__init__(daemon=True, name=f"Camara-{mac}")
         self.mac = mac
-        self.tag = tag
+        self.etiqueta = etiqueta
 
-        # Guardamos versiones sin codificar para persistencia
-        self.usuario_raw = _decode_if_needed(usuario)
-        self.password_raw = _decode_if_needed(password)
+        self.usuario_real = decodificar_si_corresponde(usuario)
+        self.password_real = decodificar_si_corresponde(password)
+        self.usuario_url = quote(self.usuario_real, safe="")
+        self.password_url = quote(self.password_real, safe="")
 
-        self.usuario = quote(self.usuario_raw, safe="")
-        self.password = quote(self.password_raw, safe="")
-        self.ip = None
-        self.rtsp_url = None
+        self.ip: str | None = None
+        self.url_rtsp: str | None = None
         self.frame = None
+        self.conectada = False
 
-        self.capture_lock = threading.Lock()
-        self.writer_lock = threading.Lock()
+        self.ajustes = ajustes or {}
+        self.bloqueo_frame = threading.Lock()
+        self.bloqueo_video = threading.Lock()
 
-        self.recording = False
-        self.out = None
-        self.last_write = 0
-        self.write_interval = 1 / RECORD_FPS
+        self.grabando = False
+        self.video_salida = None
+        self.ultima_escritura = 0.0
+        self.intervalo_escritura = 1 / FPS_GRABACION
 
-        self._stop_event = threading.Event()
-        self._force_reconnect_event = threading.Event()
-        self._last_ok_read = 0
-        self.connected = False
-        self.settings = settings or {}
+        self.evento_detener = threading.Event()
+        self.evento_reconectar = threading.Event()
+        self.ultimo_frame_ok = 0.0
 
-    def _get_media_output_dir(self):
-        configured_dir = str(self.settings.get("media_directory", "")).strip()
-        output_dir = Path(configured_dir) if configured_dir else Path(__file__).resolve().parent
-        output_dir.mkdir(parents=True, exist_ok=True)
-        return output_dir
+    def run(self) -> None:
+        self._bucle_conexion()
 
-    def _build_media_filename(self, prefix, extension):
-        camera_id = (self.ip or self.mac or "camara").replace(":", "-")
-        captured_at = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return f"{prefix}_{camera_id}_{captured_at}.{extension}"
+    def detener(self) -> None:
+        self.evento_detener.set()
+        self.evento_reconectar.set()
+        with self.bloqueo_video:
+            if self.video_salida is not None:
+                self.video_salida.release()
+                self.video_salida = None
+            self.grabando = False
 
-    def run(self):
-        self._connect_and_capture_loop()
+    def solicitar_reconexion(self) -> None:
+        self.evento_reconectar.set()
 
-    def stop(self):
-        self._stop_event.set()
-        self._force_reconnect_event.set()
-        with self.writer_lock:
-            if self.out is not None:
-                self.out.release()
-                self.out = None
-                self.recording = False
-
-    def request_reconnect(self):
-        self._force_reconnect_event.set()
-
-    def check_connection(self):
-        """Comprueba conexión y fuerza reconexión si está caída."""
-        if self._stop_event.is_set():
+    def comprobar_conexion(self) -> None:
+        if self.evento_detener.is_set():
             return
+        sin_frame = (time.time() - self.ultimo_frame_ok) > 10
+        if not self.conectada or sin_frame:
+            self.solicitar_reconexion()
 
-        stale = (time.time() - self._last_ok_read) > 10
-        if not self.connected or stale:
-            self.request_reconnect()
+    def _directorio_media(self) -> Path:
+        ruta = str(self.ajustes.get("media_directory", "")).strip()
+        carpeta = Path(ruta) if ruta else Path(__file__).resolve().parent
+        carpeta.mkdir(parents=True, exist_ok=True)
+        return carpeta
 
-    def _build_rtsp_url(self):
+    def _nombre_archivo(self, prefijo: str, extension: str) -> str:
+        identificador = (self.ip or self.mac or "camara").replace(":", "-")
+        marca_tiempo = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"{prefijo}_{identificador}_{marca_tiempo}.{extension}"
+
+    def _actualizar_url_rtsp(self) -> None:
         if self.ip:
-            self.rtsp_url = f"rtsp://{self.usuario}:{self.password}@{self.ip}:554/stream1"
+            self.url_rtsp = f"rtsp://{self.usuario_url}:{self.password_url}@{self.ip}:554/stream1"
 
-    def _resolve_ip_if_needed(self):
+    def _resolver_ip(self) -> None:
         if self.ip is None:
             self.ip = buscar_ip_por_mac(self.mac)
-            self._build_rtsp_url()
+            self._actualizar_url_rtsp()
 
-    def _connect_and_capture_loop(self):
-        while not self._stop_event.is_set():
-            self._resolve_ip_if_needed()
-            if not self.rtsp_url:
-                self.connected = False
+    def _bucle_conexion(self) -> None:
+        while not self.evento_detener.is_set():
+            self._resolver_ip()
+            if not self.url_rtsp:
+                self.conectada = False
                 time.sleep(3)
                 continue
 
-            cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
-            if not cap.isOpened():
-                self.connected = False
-                cap.release()
+            captura = cv2.VideoCapture(self.url_rtsp, cv2.CAP_FFMPEG)
+            captura.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            if not captura.isOpened():
+                self.conectada = False
+                captura.release()
                 time.sleep(2)
                 continue
 
-            self.connected = True
-            self._last_ok_read = time.time()
-            self._force_reconnect_event.clear()
+            self.conectada = True
+            self.ultimo_frame_ok = time.time()
+            self.evento_reconectar.clear()
 
-            while not self._stop_event.is_set():
-                if self._force_reconnect_event.is_set():
-                    self.connected = False
+            while not self.evento_detener.is_set():
+                if self.evento_reconectar.is_set():
+                    self.conectada = False
                     break
 
-                ret, frame = cap.read()
-                if not ret or frame is None or frame.size == 0:
-                    self.connected = False
+                ok, frame = captura.read()
+                if not ok or frame is None or frame.size == 0:
+                    self.conectada = False
                     time.sleep(0.4)
                     break
 
-                with self.capture_lock:
+                with self.bloqueo_frame:
                     self.frame = frame
 
-                self._last_ok_read = time.time()
-                self.connected = True
-                self._write_if_recording(frame)
+                self.ultimo_frame_ok = time.time()
+                self.conectada = True
+                self._escribir_video_si_corresponde(frame)
 
-            cap.release()
-            self._force_reconnect_event.clear()
+            captura.release()
+            self.evento_reconectar.clear()
             time.sleep(1)
 
-    def _write_if_recording(self, frame):
-        with self.writer_lock:
-            if self.recording and self.out:
-                now = time.time()
-                if now - self.last_write >= self.write_interval:
-                    self.out.write(frame)
-                    self.last_write = now
+    def _escribir_video_si_corresponde(self, frame) -> None:
+        with self.bloqueo_video:
+            if self.grabando and self.video_salida:
+                ahora = time.time()
+                if ahora - self.ultima_escritura >= self.intervalo_escritura:
+                    self.video_salida.write(frame)
+                    self.ultima_escritura = ahora
 
-    def toggle_record(self):
-        with self.writer_lock:
-            if not self.recording and self.frame is not None:
-                h, w, _ = self.frame.shape
-                output_dir = self._get_media_output_dir()
-                filename = output_dir / self._build_media_filename("video", "mp4")
-                self.out = cv2.VideoWriter(
-                    str(filename),
+    def alternar_grabacion(self) -> bool:
+        with self.bloqueo_video:
+            if not self.grabando and self.frame is not None:
+                alto, ancho, _ = self.frame.shape
+                destino = self._directorio_media() / self._nombre_archivo("video", "mp4")
+                self.video_salida = cv2.VideoWriter(
+                    str(destino),
                     cv2.VideoWriter_fourcc(*"mp4v"),
-                    RECORD_FPS,
-                    (w, h),
+                    FPS_GRABACION,
+                    (ancho, alto),
                 )
-                if not self.out.isOpened():
-                    self.out = None
-                    self.recording = False
+                if not self.video_salida.isOpened():
+                    self.video_salida = None
+                    self.grabando = False
                     return False
-
-                self.recording = True
-                self.last_write = time.time()
+                self.grabando = True
+                self.ultima_escritura = time.time()
                 return True
 
-            self.recording = False
-            if self.out:
-                self.out.release()
-                self.out = None
+            self.grabando = False
+            if self.video_salida:
+                self.video_salida.release()
+                self.video_salida = None
             return True
 
-    def capture_photo(self):
-        with self.capture_lock:
+    def capturar_foto(self) -> tuple[bool, str]:
+        with self.bloqueo_frame:
             if self.frame is None:
                 return False, "Sin imagen disponible"
-            frame_copy = self.frame.copy()
+            imagen = self.frame.copy()
 
-        output_dir = self._get_media_output_dir()
-        photo_path = output_dir / self._build_media_filename("foto", "jpg")
-        saved = cv2.imwrite(str(photo_path), frame_copy)
-        if not saved:
+        ruta = self._directorio_media() / self._nombre_archivo("foto", "jpg")
+        if not cv2.imwrite(str(ruta), imagen):
             return False, "No se pudo guardar la foto"
-        return True, str(photo_path)
+        return True, str(ruta)
 
+    def actualizar_ajustes(self, ajustes: dict) -> None:
+        self.ajustes = ajustes
 
-    def set_settings(self, settings):
-        self.settings = settings
-
-    def get_tapo_client(self):
+    def _cliente_tapo(self):
         if Tapo is None:
-            raise RuntimeError("Falta el módulo 'pytapo'. Instala con: pip install pytapo")
-
+            raise RuntimeError("Falta 'pytapo'. Instala con: pip install pytapo")
         if not self.ip:
-            raise RuntimeError("La cámara todavía no tiene IP asignada")
+            raise RuntimeError("La cámara aún no tiene IP")
 
-        tapo_user = self.settings.get("tapo_user", "").strip() or self.usuario_raw
-        tapo_password = self.settings.get("tapo_password", "").strip() or self.password_raw
-        return Tapo(self.ip, tapo_user, tapo_password)
+        usuario = self.ajustes.get("tapo_user", "").strip() or self.usuario_real
+        password = self.ajustes.get("tapo_password", "").strip() or self.password_real
+        return Tapo(self.ip, usuario, password)
 
-    def _call_first_available(self, client, method_names, *args):
-        for method_name in method_names:
-            method = getattr(client, method_name, None)
-            if callable(method):
-                return method(*args)
-        raise AttributeError(f"Ningún método disponible entre: {', '.join(method_names)}")
+    def _ejecutar_metodo_disponible(self, cliente, metodos: list[str], *args):
+        for nombre in metodos:
+            metodo = getattr(cliente, nombre, None)
+            if callable(metodo):
+                return metodo(*args)
+        raise AttributeError(f"No hay método disponible entre: {', '.join(metodos)}")
 
-    def move(self, x_axis, y_axis):
-        client = self.get_tapo_client()
-        self._call_first_available(client, ["moveMotor", "move_motor", "move"], x_axis, y_axis)
+    def mover(self, eje_x: int, eje_y: int) -> None:
+        cliente = self._cliente_tapo()
+        self._ejecutar_metodo_disponible(cliente, ["moveMotor", "move_motor", "move"], eje_x, eje_y)
 
-    def zoom(self, zoom_in):
-        client = self.get_tapo_client()
-        if zoom_in:
-            self._call_first_available(client, ["zoomIn", "zoom_in"])
+    def zoom(self, acercar: bool) -> None:
+        cliente = self._cliente_tapo()
+        if acercar:
+            self._ejecutar_metodo_disponible(cliente, ["zoomIn", "zoom_in"])
         else:
-            self._call_first_available(client, ["zoomOut", "zoom_out"])
+            self._ejecutar_metodo_disponible(cliente, ["zoomOut", "zoom_out"])
 
 
-# ---------------- CAMERA WIDGET ----------------
-class CameraWidget(QWidget):
-    def __init__(self, feed):
+class TarjetaCamara(QWidget):
+    """Tarjeta compacta para la grilla principal."""
+
+    def __init__(self, hilo: HiloCamara):
         super().__init__()
-        self.feed = feed
+        self.hilo = hilo
+        self.ventana_camara = None
 
         self.setObjectName("cameraCard")
+        self.disposicion = QVBoxLayout(self)
 
-        self.label = QLabel("Conectando…", alignment=Qt.AlignmentFlag.AlignCenter)
-        self.label.setObjectName("videoLabel")
+        titulo = hilo.etiqueta or hilo.mac
+        self.etiqueta_titulo = QLabel(f"📷 {titulo}")
+        self.etiqueta_titulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.status = QLabel("⏳ Iniciando…")
-        self.status.setObjectName("statusLabel")
+        self.etiqueta_video = QLabel("Cargando...")
+        self.etiqueta_video.setObjectName("videoLabel")
+        self.etiqueta_video.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.etiqueta_video.setMinimumSize(280, 180)
 
-        self.btn_record = QPushButton("⏺ Grabar")
-        self.btn_record.clicked.connect(self.on_toggle_record)
+        self.etiqueta_estado = QLabel("Estado: Desconectada")
+        self.etiqueta_estado.setObjectName("statusLabel")
 
-        self.btn_capture = QPushButton("📸 Capturar")
-        self.btn_capture.clicked.connect(self.on_capture_photo)
+        fila_botones = QHBoxLayout()
+        self.btn_grabar = QPushButton("● Grabar")
+        self.btn_foto = QPushButton("📸 Foto")
+        self.btn_grabar.clicked.connect(self.alternar_grabacion)
+        self.btn_foto.clicked.connect(self.capturar_foto)
+        fila_botones.addWidget(self.btn_grabar)
+        fila_botones.addWidget(self.btn_foto)
 
-        btns = QHBoxLayout()
-        btns.addStretch()
-        btns.addWidget(self.btn_record)
-        btns.addWidget(self.btn_capture)
-        btns.addStretch()
+        self.disposicion.addWidget(self.etiqueta_titulo)
+        self.disposicion.addWidget(self.etiqueta_video)
+        self.disposicion.addWidget(self.etiqueta_estado)
+        self.disposicion.addLayout(fila_botones)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
-        layout.addWidget(self.status)
-        layout.addWidget(self.label, stretch=1)
-        layout.addLayout(btns)
+        self.temporizador_frame = QTimer(self)
+        self.temporizador_frame.timeout.connect(self.actualizar_frame)
+        self.temporizador_frame.start(40)
 
-        self.label.mouseDoubleClickEvent = self.open_window
-        self.cam_window = None
+        self.temporizador_conexion = QTimer(self)
+        self.temporizador_conexion.timeout.connect(self.hilo.comprobar_conexion)
+        self.temporizador_conexion.start(INTERVALO_VERIFICACION_MS)
 
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_frame)
-        self.timer.start(40)
+    def alternar_grabacion(self) -> None:
+        if self.hilo.alternar_grabacion():
+            if self.hilo.grabando:
+                self.btn_grabar.setText("■ Detener")
+                self.etiqueta_estado.setText("Estado: Grabando")
+            else:
+                self.btn_grabar.setText("● Grabar")
+                self.etiqueta_estado.setText("Estado: Vista previa")
 
-        self.connection_timer = QTimer()
-        self.connection_timer.timeout.connect(self._minute_connection_check)
-        self.connection_timer.start(CONNECTION_CHECK_INTERVAL_MS)
+    def capturar_foto(self) -> None:
+        ok, mensaje = self.hilo.capturar_foto()
+        self.etiqueta_estado.setText(f"Estado: {'Foto guardada' if ok else mensaje}")
 
-    def _minute_connection_check(self):
-        self.feed.check_connection()
+    def actualizar_frame(self) -> None:
+        with self.hilo.bloqueo_frame:
+            frame = self.hilo.frame.copy() if self.hilo.frame is not None else None
 
-    def on_toggle_record(self):
-        ok = self.feed.toggle_record()
-        if not ok:
-            self.status.setText("❌ Error al iniciar grabación")
-            self.btn_record.setText("⏺ Grabar")
+        if frame is None:
+            self.etiqueta_estado.setText("Estado: Desconectada")
             return
 
-        if self.feed.recording:
-            self.btn_record.setText("⏹ Detener")
-            self.status.setText("🔴 Grabando")
-        else:
-            self.btn_record.setText("⏺ Grabar")
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        alto, ancho, canales = frame_rgb.shape
+        imagen = QImage(frame_rgb.data, ancho, alto, canales * ancho, QImage.Format.Format_RGB888)
+        pixmap = QPixmap.fromImage(imagen).scaled(
+            self.etiqueta_video.width(),
+            self.etiqueta_video.height(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.etiqueta_video.setPixmap(pixmap)
+        self.etiqueta_estado.setText("Estado: En línea")
 
-    def on_capture_photo(self):
-        ok, message = self.feed.capture_photo()
-        if ok:
-            self.status.setText(f"📸 Foto guardada: {message}")
-        else:
-            self.status.setText(f"❌ {message}")
-
-    def update_frame(self):
-        if self.feed.frame is not None:
-            with self.feed.capture_lock:
-                frame = self.feed.frame.copy()
-
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = QImage(
-                rgb.data,
-                rgb.shape[1],
-                rgb.shape[0],
-                rgb.strides[0],
-                QImage.Format.Format_RGB888,
-            )
-            self.label.setPixmap(
-                QPixmap.fromImage(img).scaled(
-                    self.label.size(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-            )
-            self.status.setText(
-                f"🟢 En línea | IP: {self.feed.ip or 'resolviendo'}"
-                + (" | 🔴 Grabando" if self.feed.recording else "")
-            )
-        else:
-            self.status.setText("🟡 Sin imagen, reconectando…")
-
-    def open_window(self, event):
-        if self.cam_window is None:
-            self.cam_window = CameraWindow(self.feed)
-        self.cam_window.show()
+    def mouseDoubleClickEvent(self, _event):  # noqa: N802
+        if self.ventana_camara is None:
+            self.ventana_camara = VentanaCamara(self.hilo)
+        self.ventana_camara.show()
+        self.ventana_camara.raise_()
+        self.ventana_camara.activateWindow()
 
 
-# ---------------- CAMERA WINDOW ----------------
-class CameraWindow(QWidget):
-    action_result = pyqtSignal(str)
+class VentanaCamara(QWidget):
+    """Vista ampliada con controles básicos y PTZ."""
 
-    def __init__(self, feed):
+    senal_error = pyqtSignal(str)
+
+    def __init__(self, hilo: HiloCamara):
         super().__init__()
-        self.setWindowTitle(f"Cámara {feed.ip or feed.mac}")
-        self.resize(700, 480)
-        self.feed = feed
+        self.hilo = hilo
+        self.setWindowTitle(f"Cámara: {hilo.etiqueta or hilo.mac}")
+        self.resize(960, 620)
 
-        self.label = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
-        self.status = QLabel("Controles PTZ listos")
-        self.action_result.connect(self.status.setText)
+        self.etiqueta_video = QLabel("Cargando...")
+        self.etiqueta_video.setObjectName("videoLabel")
+        self.etiqueta_video.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.btn_record = QPushButton("⏺ Grabar")
-        self.btn_capture = QPushButton("📸 Capturar")
+        self.etiqueta_estado = QLabel("Estado: Inicializando")
+
+        self.btn_grabar = QPushButton("● Grabar")
+        self.btn_foto = QPushButton("📸 Foto")
+        self.btn_grabar.clicked.connect(self.alternar_grabacion)
+        self.btn_foto.clicked.connect(self.capturar_foto)
+
+        fila_acciones = QHBoxLayout()
+        fila_acciones.addWidget(self.btn_grabar)
+        fila_acciones.addWidget(self.btn_foto)
+
+        contenedor_ptz = QWidget()
+        grilla_ptz = QGridLayout(contenedor_ptz)
+        self.btn_arriba = QPushButton("↑")
+        self.btn_abajo = QPushButton("↓")
+        self.btn_izquierda = QPushButton("←")
+        self.btn_derecha = QPushButton("→")
+        self.btn_zoom_mas = QPushButton("+ Zoom")
+        self.btn_zoom_menos = QPushButton("- Zoom")
+
+        grilla_ptz.addWidget(self.btn_arriba, 0, 1)
+        grilla_ptz.addWidget(self.btn_izquierda, 1, 0)
+        grilla_ptz.addWidget(self.btn_derecha, 1, 2)
+        grilla_ptz.addWidget(self.btn_abajo, 2, 1)
+        grilla_ptz.addWidget(self.btn_zoom_mas, 1, 3)
+        grilla_ptz.addWidget(self.btn_zoom_menos, 1, 4)
+
+        self.btn_arriba.clicked.connect(lambda: self._accion_segura(lambda: self.hilo.mover(0, 1), "Movimiento enviado"))
+        self.btn_abajo.clicked.connect(lambda: self._accion_segura(lambda: self.hilo.mover(0, -1), "Movimiento enviado"))
+        self.btn_izquierda.clicked.connect(lambda: self._accion_segura(lambda: self.hilo.mover(-1, 0), "Movimiento enviado"))
+        self.btn_derecha.clicked.connect(lambda: self._accion_segura(lambda: self.hilo.mover(1, 0), "Movimiento enviado"))
+        self.btn_zoom_mas.clicked.connect(lambda: self._accion_segura(lambda: self.hilo.zoom(True), "Zoom + enviado"))
+        self.btn_zoom_menos.clicked.connect(lambda: self._accion_segura(lambda: self.hilo.zoom(False), "Zoom - enviado"))
+
+        self.senal_error.connect(lambda texto: self.etiqueta_estado.setText(f"Estado: {texto}"))
 
         layout = QVBoxLayout(self)
-        media_actions = QHBoxLayout()
-        media_actions.addStretch()
-        media_actions.addWidget(self.btn_record)
-        media_actions.addWidget(self.btn_capture)
-        media_actions.addStretch()
+        layout.addWidget(self.etiqueta_video, stretch=1)
+        layout.addWidget(self.etiqueta_estado)
+        layout.addLayout(fila_acciones)
+        layout.addWidget(contenedor_ptz)
 
-        layout.addLayout(media_actions)
-        layout.addWidget(self.label, stretch=1)
+        self.temporizador = QTimer(self)
+        self.temporizador.timeout.connect(self.actualizar_frame)
+        self.temporizador.start(40)
 
-        controls_container = QWidget()
-        controls_layout = QGridLayout(controls_container)
-        controls_layout.setHorizontalSpacing(8)
-        controls_layout.setVerticalSpacing(8)
+        self._habilitar_ptz(Tapo is not None)
 
-        self.btn_up = QPushButton("▲")
-        self.btn_down = QPushButton("▼")
-        self.btn_left = QPushButton("◀")
-        self.btn_right = QPushButton("▶")
-        self.btn_center = QPushButton("●")
-
-        self.btn_zoom_in = QPushButton("Zoom +")
-        self.btn_zoom_out = QPushButton("Zoom -")
-
-        for btn in [
-            self.btn_up,
-            self.btn_down,
-            self.btn_left,
-            self.btn_right,
-            self.btn_center,
+    def _habilitar_ptz(self, habilitar: bool) -> None:
+        for boton in [
+            self.btn_arriba,
+            self.btn_abajo,
+            self.btn_izquierda,
+            self.btn_derecha,
+            self.btn_zoom_mas,
+            self.btn_zoom_menos,
         ]:
-            btn.setFixedSize(52, 40)
-            btn.setObjectName("padButton")
+            boton.setEnabled(habilitar)
+        if not habilitar:
+            self.etiqueta_estado.setText("Estado: PTZ deshabilitado (falta pytapo)")
 
-        for btn in [self.btn_zoom_in, self.btn_zoom_out]:
-            btn.setFixedSize(84, 32)
-            btn.setObjectName("zoomButton")
+    def _accion_segura(self, accion, mensaje_ok: str) -> None:
+        try:
+            accion()
+            self.etiqueta_estado.setText(f"Estado: {mensaje_ok}")
+        except Exception as exc:  # pragma: no cover - depende de red/dispositivo
+            self.senal_error.emit(str(exc))
 
-        controls_layout.addWidget(self.btn_up, 0, 1)
-        controls_layout.addWidget(self.btn_left, 1, 0)
-        controls_layout.addWidget(self.btn_center, 1, 1)
-        controls_layout.addWidget(self.btn_right, 1, 2)
-        controls_layout.addWidget(self.btn_down, 2, 1)
-        controls_layout.addWidget(self.btn_zoom_in, 0, 3)
-        controls_layout.addWidget(self.btn_zoom_out, 1, 3)
+    def alternar_grabacion(self) -> None:
+        if self.hilo.alternar_grabacion():
+            self.btn_grabar.setText("■ Detener" if self.hilo.grabando else "● Grabar")
 
-        layout.addWidget(controls_container, alignment=Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.status)
+    def capturar_foto(self) -> None:
+        ok, mensaje = self.hilo.capturar_foto()
+        self.etiqueta_estado.setText(f"Estado: {'Foto guardada' if ok else mensaje}")
 
-        self.btn_up.clicked.connect(lambda: self.send_move(0, 1))
-        self.btn_down.clicked.connect(lambda: self.send_move(0, -1))
-        self.btn_left.clicked.connect(lambda: self.send_move(-1, 0))
-        self.btn_right.clicked.connect(lambda: self.send_move(1, 0))
-        self.btn_center.clicked.connect(lambda: self.send_move(0, 0))
-        self.btn_zoom_in.clicked.connect(lambda: self.send_zoom(True))
-        self.btn_zoom_out.clicked.connect(lambda: self.send_zoom(False))
-        self.btn_record.clicked.connect(self.on_toggle_record)
-        self.btn_capture.clicked.connect(self.on_capture_photo)
+    def actualizar_frame(self) -> None:
+        with self.hilo.bloqueo_frame:
+            frame = self.hilo.frame.copy() if self.hilo.frame is not None else None
 
-        if Tapo is None:
-            self._set_ptz_enabled(False)
-            self.status.setText("⚠️ PTZ deshabilitado: instala pytapo")
-
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_frame)
-        self.timer.start(40)
-
-    def _set_ptz_enabled(self, enabled):
-        controls = [
-            self.btn_up,
-            self.btn_down,
-            self.btn_left,
-            self.btn_right,
-            self.btn_center,
-            self.btn_zoom_in,
-            self.btn_zoom_out,
-        ]
-        for control in controls:
-            control.setEnabled(enabled)
-
-    def _run_camera_action(self, action, success_message):
-        def worker():
-            try:
-                action()
-                self.action_result.emit(success_message)
-            except Exception as exc:
-                self.action_result.emit(f"❌ {exc}")
-
-        threading.Thread(target=worker, daemon=True, name=f"PTZ-{self.feed.mac}").start()
-
-    def send_move(self, x_axis, y_axis):
-        self._run_camera_action(lambda: self.feed.move(x_axis, y_axis), "✅ Movimiento enviado")
-
-    def send_zoom(self, zoom_in):
-        message = "✅ Zoom + enviado" if zoom_in else "✅ Zoom - enviado"
-        self._run_camera_action(lambda: self.feed.zoom(zoom_in), message)
-
-    def on_toggle_record(self):
-        ok = self.feed.toggle_record()
-        if not ok:
-            self.action_result.emit("❌ Error al iniciar grabación")
-            self.btn_record.setText("⏺ Grabar")
+        if frame is None:
             return
-        self.btn_record.setText("⏹ Detener" if self.feed.recording else "⏺ Grabar")
 
-    def on_capture_photo(self):
-        ok, message = self.feed.capture_photo()
-        self.action_result.emit(f"📸 Foto guardada: {message}" if ok else f"❌ {message}")
-
-    def update_frame(self):
-        if self.feed.frame is not None:
-            with self.feed.capture_lock:
-                frame = self.feed.frame.copy()
-
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = QImage(
-                rgb.data,
-                rgb.shape[1],
-                rgb.shape[0],
-                rgb.strides[0],
-                QImage.Format.Format_RGB888,
-            )
-            self.label.setPixmap(
-                QPixmap.fromImage(img).scaled(
-                    self.label.size(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-            )
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        alto, ancho, canales = frame_rgb.shape
+        imagen = QImage(frame_rgb.data, ancho, alto, canales * ancho, QImage.Format.Format_RGB888)
+        pixmap = QPixmap.fromImage(imagen).scaled(
+            self.etiqueta_video.width(),
+            self.etiqueta_video.height(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.etiqueta_video.setPixmap(pixmap)
 
 
-# ---------------- GUARDAR Y CARGAR ----------------
-def save_settings(settings):
-    settings_file = Path(__file__).with_name(SETTINGS_FILE)
-    with settings_file.open("w", encoding="utf-8") as f:
-        json.dump(settings, f, indent=4, ensure_ascii=False)
+# Compatibilidad con nombres anteriores
+CameraFeed = HiloCamara
+CameraWidget = TarjetaCamara
+CameraWindow = VentanaCamara
 
 
-def update_settings(partial_settings):
-    current_settings = load_settings()
-    current_settings.update(partial_settings)
-    save_settings(current_settings)
-    return current_settings
+def guardar_ajustes(ajustes: dict) -> None:
+    Path(ARCHIVO_CONFIGURACION).write_text(json.dumps(ajustes, indent=4, ensure_ascii=False), encoding="utf-8")
 
 
-def load_settings():
-    settings_file = Path(__file__).with_name(SETTINGS_FILE)
+def update_settings(parcial: dict) -> dict:
+    actuales = load_settings()
+    actuales.update(parcial)
+    guardar_ajustes(actuales)
+    return actuales
+
+
+def load_settings() -> dict:
+    ruta = Path(ARCHIVO_CONFIGURACION)
+    if not ruta.exists():
+        return {"tapo_user": "", "tapo_password": "", "media_directory": ""}
 
     try:
-        with settings_file.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-            if isinstance(data, dict):
-                return {
-                    "tapo_user": str(data.get("tapo_user", "")),
-                    "tapo_password": str(data.get("tapo_password", "")),
-                    "media_directory": str(data.get("media_directory", "")),
-                }
-    except FileNotFoundError:
-        pass
-    except json.JSONDecodeError:
-        pass
-
-    return {"tapo_user": "", "tapo_password": "", "media_directory": ""}
-
-
-def save_cameras(widgets):
-    cams_data = []
-    for w in widgets:
-        cam = {
-            "mac": w.feed.mac,
-            "usuario": w.feed.usuario_raw,
-            "password": w.feed.password_raw,
-            "tag": w.feed.tag,
+        data = json.loads(ruta.read_text(encoding="utf-8"))
+        return {
+            "tapo_user": data.get("tapo_user", ""),
+            "tapo_password": data.get("tapo_password", ""),
+            "media_directory": data.get("media_directory", ""),
         }
-        cams_data.append(cam)
-
-    data_file = Path(__file__).with_name("cameras.dat")
-    with data_file.open("w", encoding="utf-8") as f:
-        json.dump(cams_data, f, indent=4, ensure_ascii=False)
+    except Exception:
+        return {"tapo_user": "", "tapo_password": "", "media_directory": ""}
 
 
+def save_settings(settings: dict) -> None:
+    guardar_ajustes(settings)
 
-def load_cameras(settings=None):
-    widgets = []
-    data_file = Path(__file__).with_name("cameras.dat")
+
+def save_cameras(tarjetas: list[TarjetaCamara]) -> None:
+    camaras = []
+    for tarjeta in tarjetas:
+        camaras.append(
+            {
+                "mac": tarjeta.hilo.mac,
+                "usuario": tarjeta.hilo.usuario_real,
+                "password": tarjeta.hilo.password_real,
+                "tag": tarjeta.hilo.etiqueta,
+            }
+        )
+    Path(ARCHIVO_CAMARAS).write_text(json.dumps(camaras, indent=4, ensure_ascii=False), encoding="utf-8")
+
+
+def load_cameras(settings: dict | None = None) -> list[TarjetaCamara]:
+    ruta = Path(ARCHIVO_CAMARAS)
+    if not ruta.exists():
+        return []
 
     try:
-        with data_file.open("r", encoding="utf-8") as f:
-            cams_data = json.load(f)
-            for cam in cams_data:
-                feed = CameraFeed(
-                    cam["mac"],
-                    cam["usuario"],
-                    cam["password"],
-                    tag=cam.get("tag", ""),
-                    settings=settings,
-                )
-                feed.start()
-                widget = CameraWidget(feed)
-                widgets.append(widget)
-    except FileNotFoundError:
-        pass
-    return widgets
+        camaras = json.loads(ruta.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+    tarjetas: list[TarjetaCamara] = []
+    for camara in camaras:
+        hilo = HiloCamara(
+            mac=camara.get("mac", ""),
+            usuario=camara.get("usuario", ""),
+            password=camara.get("password", ""),
+            etiqueta=camara.get("tag", ""),
+            ajustes=settings,
+        )
+        hilo.start()
+        tarjetas.append(TarjetaCamara(hilo))
+    return tarjetas
