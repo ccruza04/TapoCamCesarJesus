@@ -32,11 +32,31 @@ from estilos import APP_STYLE
 from funciones import CameraFeed, CameraWidget, load_cameras, load_settings, save_cameras, update_settings
 
 
+"""Interfaz principal de la aplicación CCTV.
+
+Este módulo concentra la construcción visual de la aplicación y la coordinación de
+paneles de UI para:
+
+- Panel de cámaras en cuadrícula responsiva.
+- Panel multimedia para explorar archivos capturados.
+- Panel tabular para edición/eliminación de cámaras.
+- Panel de configuración general (credenciales Tapo y ruta de media).
+
+Nota importante:
+Se conservan nombres de clases/métodos existentes para mantener compatibilidad y
+funcionalidad, limitando los cambios a documentación y organización del código.
+"""
+
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".webm", ".m4v"}
 
 
+# ============================================================
+# PANEL MULTIMEDIA
+# ============================================================
 class MediaPanel(QWidget):
+    """Panel para listar, previsualizar y borrar fotos/videos del directorio activo."""
+
     def __init__(self, directory="", parent=None):
         super().__init__(parent)
         self.directory = directory
@@ -88,10 +108,12 @@ class MediaPanel(QWidget):
         self.set_directory(directory)
 
     def set_directory(self, directory):
+        """Asigna una nueva ruta de media y recarga el listado."""
         self.directory = directory
         self.load_media()
 
     def _iter_media_files(self):
+        """Retorna archivos multimedia soportados, ordenados por nombre."""
         if not self.directory:
             return []
         base_path = Path(self.directory)
@@ -103,6 +125,7 @@ class MediaPanel(QWidget):
         )
 
     def load_media(self):
+        """Carga/recarga el listado de fotos y videos del directorio configurado."""
         self.path_label.setText(f"Directorio actual: {self.directory or 'No definido'}")
         self.media_list.clear()
         self.preview_label.setText("Selecciona un archivo para previsualizar")
@@ -132,12 +155,14 @@ class MediaPanel(QWidget):
             self.media_list.addItem("No se encontraron fotos ni videos en la carpeta.")
 
     def open_item(self, item):
+        """Abre un archivo con la aplicación predeterminada del sistema."""
         media_path = item.data(Qt.ItemDataRole.UserRole)
         if not media_path:
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(media_path))
 
     def update_preview(self, current, _previous):
+        """Actualiza la miniatura de preview según el elemento seleccionado."""
         if current is None:
             return
 
@@ -187,10 +212,12 @@ class MediaPanel(QWidget):
             )
 
     def resizeEvent(self, event):
+        """Al redimensionar el panel, recalcula el preview para mantener proporciones."""
         super().resizeEvent(event)
         self.update_preview(self.media_list.currentItem(), None)
 
     def delete_selected_item(self):
+        """Borra el archivo actualmente seleccionado previa confirmación."""
         current = self.media_list.currentItem()
         if current is None:
             QMessageBox.information(self, "Sin selección", "Selecciona un elemento para borrar.")
@@ -221,11 +248,13 @@ class MediaPanel(QWidget):
         self.load_media()
 
     def toggle_selection_mode(self, state):
+        """Activa/desactiva el modo de selección múltiple para borrado masivo."""
         self.selection_mode = state == Qt.CheckState.Checked.value
         self.btn_delete_all.setVisible(self.selection_mode)
         self.load_media()
 
     def delete_checked_items(self):
+        """Borra todos los elementos marcados cuando el modo selección está activo."""
         checked_paths = []
         for i in range(self.media_list.count()):
             item = self.media_list.item(i)
@@ -260,8 +289,12 @@ class MediaPanel(QWidget):
             QMessageBox.warning(self, "Borrado parcial", "\n".join(errors))
 
 
-
+# ============================================================
+# DIÁLOGO DE ALTA / EDICIÓN DE CÁMARAS
+# ============================================================
 class AddCameraDialog(QDialog):
+    """Diálogo reutilizable para crear o editar cámaras."""
+
     def __init__(self, parent=None, title="Agregar cámara", submit_text="Guardar", initial_values=None):
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -307,6 +340,7 @@ class AddCameraDialog(QDialog):
         layout.addLayout(actions)
 
     def get_values(self):
+        """Devuelve los valores del formulario saneados (trim en campos de texto)."""
         return (
             self.input_mac.text().strip(),
             self.input_user.text().strip(),
@@ -315,7 +349,12 @@ class AddCameraDialog(QDialog):
         )
 
 
+# ============================================================
+# PANEL LISTADO DE CÁMARAS
+# ============================================================
 class CameraListPanel(QWidget):
+    """Tabla de cámaras con búsqueda y acciones de edición/borrado."""
+
     HEADERS = ["MAC", "IP", "Usuario RTSP", "Contraseña RTSP", "Tag", "Acciones"]
 
     def __init__(self, parent=None, on_edit=None, on_delete=None):
@@ -345,10 +384,12 @@ class CameraListPanel(QWidget):
         layout.addWidget(self.table, stretch=1)
 
     def set_widgets(self, widgets):
+        """Recibe la lista de widgets de cámara y reconstruye la tabla."""
         self._widgets = widgets
         self._reload()
 
     def _reload(self):
+        """Vuelca datos actuales de cámaras a la tabla, incluyendo botones de acción."""
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
 
@@ -385,6 +426,7 @@ class CameraListPanel(QWidget):
         self._apply_filters()
 
     def refresh_dynamic_values(self):
+        """Refresca columnas dinámicas (p. ej., IP resuelta) sin reconstruir toda la tabla."""
         for row, widget in enumerate(self._widgets):
             if row >= self.table.rowCount():
                 break
@@ -393,14 +435,17 @@ class CameraListPanel(QWidget):
                 ip_item.setText(widget.feed.ip or "")
 
     def _trigger_edit(self, widget):
+        """Dispara callback de edición si fue proporcionado."""
         if callable(self._on_edit):
             self._on_edit(widget)
 
     def _trigger_delete(self, widget):
+        """Dispara callback de borrado si fue proporcionado."""
         if callable(self._on_delete):
             self._on_delete(widget)
 
     def _apply_filters(self):
+        """Aplica filtro por texto contra MAC, IP y Tag."""
         query = self.search_input.text().strip().lower()
 
         for row in range(self.table.rowCount()):
@@ -411,7 +456,12 @@ class CameraListPanel(QWidget):
             self.table.setRowHidden(row, not visible)
 
 
+# ============================================================
+# VENTANA PRINCIPAL
+# ============================================================
 class MainWindow(QMainWindow):
+    """Ventana principal que orquesta tabs, persistencia y ciclo de vida de cámaras."""
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("CCTV Responsive")
@@ -458,6 +508,7 @@ class MainWindow(QMainWindow):
         self.table_refresh_timer = self.startTimer(2000)
 
     def _build_cameras_tab(self):
+        """Construye el tab principal de visualización en cuadrícula."""
         cameras_tab = QWidget()
         layout = QVBoxLayout(cameras_tab)
         layout.setContentsMargins(2, 2, 2, 2)
@@ -486,6 +537,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(cameras_tab, "Camaras")
 
     def _build_settings_tab(self):
+        """Construye el tab de configuración global de credenciales y ruta multimedia."""
         settings_tab = QWidget()
         layout = QVBoxLayout(settings_tab)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -547,11 +599,13 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(settings_tab, "Configuración")
 
     def _load_settings_inputs(self, settings):
+        """Carga configuración persistida en los inputs del tab de ajustes."""
         self.input_tapo_user.setText(settings.get("tapo_user", ""))
         self.input_tapo_password.setText(settings.get("tapo_password", ""))
         self.input_media_directory.setText(settings.get("media_directory", ""))
 
     def _build_media_tab(self):
+        """Construye el tab de gestión multimedia."""
         media_tab = QWidget()
         layout = QVBoxLayout(media_tab)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -567,6 +621,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(media_tab, "Multimedia")
 
     def _build_camera_list_tab(self):
+        """Construye el tab de listado tabular de cámaras."""
         list_tab = QWidget()
         layout = QVBoxLayout(list_tab)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -582,10 +637,12 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(list_tab, "Listado de cámaras")
 
     def _refresh_header(self):
+        """Actualiza contador visible de cámaras en cabecera."""
         n = len(self.widgets)
         self.counter_label.setText(f"{n} cámara" if n == 1 else f"{n} cámaras")
 
     def build_grid(self):
+        """Reconstruye la cuadrícula responsiva a partir del listado de widgets."""
         while self.grid.count():
             item = self.grid.takeAt(0)
             if item.widget():
@@ -616,6 +673,7 @@ class MainWindow(QMainWindow):
             self.grid.setColumnStretch(col, 1)
 
     def add_camera_dialog(self):
+        """Solicita datos por diálogo y crea una nueva cámara."""
         dialog = AddCameraDialog(self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -628,6 +686,7 @@ class MainWindow(QMainWindow):
         self.add_camera(mac, usuario, password, tag)
 
     def edit_camera_dialog(self, widget):
+        """Edita una cámara existente reutilizando el mismo diálogo de alta."""
         feed = widget.feed
         dialog = AddCameraDialog(
             self,
@@ -651,6 +710,7 @@ class MainWindow(QMainWindow):
         self.update_camera(widget, mac, usuario, password, tag)
 
     def save_settings_from_tab(self):
+        """Persiste credenciales Tapo y las propaga a cada feed activo."""
         tapo_settings = {
             "tapo_user": self.input_tapo_user.text().strip(),
             "tapo_password": self.input_tapo_password.text().strip(),
@@ -663,6 +723,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Configuración de Tapo guardada", 3000)
 
     def select_media_directory(self):
+        """Abre selector de carpetas para definir ruta multimedia de salida/lectura."""
         selected = QFileDialog.getExistingDirectory(
             self,
             "Seleccionar carpeta de media",
@@ -672,6 +733,7 @@ class MainWindow(QMainWindow):
             self.input_media_directory.setText(selected)
 
     def save_media_directory_from_tab(self):
+        """Guarda la ruta multimedia y actualiza paneles asociados."""
         media_directory = self.input_media_directory.text().strip()
         self.settings = update_settings({"media_directory": media_directory})
         self._update_media_path_labels()
@@ -680,10 +742,12 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Ruta de media guardada", 3000)
 
     def _update_media_path_labels(self):
+        """Sincroniza el directorio configurado con el panel multimedia principal."""
         media_directory = self.settings.get("media_directory", "")
         self.media_panel.set_directory(media_directory)
 
     def open_media_window(self):
+        """Abre (o reutiliza) ventana flotante de galería multimedia."""
         media_directory = self.settings.get("media_directory", "")
         if self.media_window is None:
             self.media_window = MediaPanel(media_directory)
@@ -696,6 +760,7 @@ class MainWindow(QMainWindow):
         self.media_window.activateWindow()
 
     def add_camera(self, mac, usuario, password, tag=""):
+        """Crea, inicia y agrega una cámara al estado y persistencia."""
         feed = CameraFeed(mac, usuario, password, tag=tag, settings=self.settings)
         feed.start()
         widget = CameraWidget(feed)
@@ -705,6 +770,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Cámara {mac} agregada", 3000)
 
     def update_camera(self, widget, mac, usuario, password, tag=""):
+        """Reemplaza una cámara existente preservando su posición en lista."""
         if widget not in self.widgets:
             return
 
@@ -725,6 +791,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Cámara {previous_mac} actualizada", 3000)
 
     def delete_camera_with_confirmation(self, widget):
+        """Elimina una cámara tras confirmación del usuario."""
         if widget not in self.widgets:
             return
 
@@ -750,12 +817,14 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Cámara {feed.mac} borrada", 3000)
 
     def timerEvent(self, event):
+        """Refresca datos dinámicos periódicos del listado de cámaras."""
         if event.timerId() == self.table_refresh_timer:
             self.camera_list_panel.refresh_dynamic_values()
         else:
             super().timerEvent(event)
 
     def closeEvent(self, event):
+        """Detiene todos los feeds activos antes de cerrar la aplicación."""
         for widget in self.widgets:
             widget.feed.stop()
         super().closeEvent(event)

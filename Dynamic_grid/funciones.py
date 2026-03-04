@@ -1,3 +1,15 @@
+"""Módulo de lógica de cámaras, render y persistencia.
+
+Contiene:
+- Descubrimiento de IP por MAC en red local.
+- Hilo de captura RTSP con reconexión y grabación.
+- Widgets de cámara (tarjeta y ventana ampliada con PTZ).
+- Utilidades de lectura/escritura de configuración y cámaras.
+
+Se conserva la funcionalidad original; esta versión refuerza la documentación y
+la segmentación para facilitar mantenimiento.
+"""
+
 import cv2
 import json
 import re
@@ -17,6 +29,10 @@ try:
 except ModuleNotFoundError:
     Tapo = None
 
+
+# ============================================================
+# CONSTANTES
+# ============================================================
 RED_BASE = "192.168.60."
 RECORD_FPS = 15
 PING_TIMEOUT_MS = 400
@@ -25,16 +41,18 @@ SETTINGS_FILE = "settings.json"
 
 
 def _decode_if_needed(value: str) -> str:
-    """Permite cargar credenciales antiguas ya codificadas sin romper el login."""
+    """Decodifica credenciales antiguas URL-encoded sin romper compatibilidad."""
     try:
         return unquote(value)
     except Exception:
         return value
 
 
-# ---------------- BUSCAR IP ----------------
+# ============================================================
+# DESCUBRIMIENTO DE IP
+# ============================================================
 def buscar_ip_por_mac(mac: str):
-    """Búsqueda de IP por MAC usando ping corto + ARP."""
+    """Busca una IP por MAC usando ping rápido + tabla ARP local."""
     mac = mac.lower().replace(":", "-")
     for i in range(1, 255):
         ip = f"{RED_BASE}{i}"
@@ -53,14 +71,18 @@ def buscar_ip_por_mac(mac: str):
     return None
 
 
-# ---------------- CAMERA THREAD ----------------
+# ============================================================
+# HILO DE CÁMARA
+# ============================================================
 class CameraFeed(threading.Thread):
+    """Hilo daemon que mantiene streaming RTSP, grabación y captura fotográfica."""
+
     def __init__(self, mac, usuario, password, tag="", settings=None):
         super().__init__(daemon=True, name=f"CameraStream-{mac}")
         self.mac = mac
         self.tag = tag
 
-        # Guardamos versiones sin codificar para persistencia
+        # Versiones sin codificar para persistencia y uso en UI
         self.usuario_raw = _decode_if_needed(usuario)
         self.password_raw = _decode_if_needed(password)
 
@@ -85,20 +107,24 @@ class CameraFeed(threading.Thread):
         self.settings = settings or {}
 
     def _get_media_output_dir(self):
+        """Devuelve (y crea si falta) la carpeta de salida para fotos/videos."""
         configured_dir = str(self.settings.get("media_directory", "")).strip()
         output_dir = Path(configured_dir) if configured_dir else Path(__file__).resolve().parent
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir
 
     def _build_media_filename(self, prefix, extension):
+        """Construye nombres de archivo con prefijo, cámara e instante de captura."""
         camera_id = (self.ip or self.mac or "camara").replace(":", "-")
         captured_at = datetime.now().strftime("%Y%m%d_%H%M%S")
         return f"{prefix}_{camera_id}_{captured_at}.{extension}"
 
     def run(self):
+        """Punto de entrada del hilo."""
         self._connect_and_capture_loop()
 
     def stop(self):
+        """Solicita parar el hilo y libera recursos de escritura si existen."""
         self._stop_event.set()
         self._force_reconnect_event.set()
         with self.writer_lock:
@@ -108,10 +134,11 @@ class CameraFeed(threading.Thread):
                 self.recording = False
 
     def request_reconnect(self):
+        """Marca reconexión forzada para reiniciar captura RTSP."""
         self._force_reconnect_event.set()
 
     def check_connection(self):
-        """Comprueba conexión y fuerza reconexión si está caída."""
+        """Comprueba salud de conexión y fuerza reconexión si está caída o estancada."""
         if self._stop_event.is_set():
             return
 
@@ -120,15 +147,18 @@ class CameraFeed(threading.Thread):
             self.request_reconnect()
 
     def _build_rtsp_url(self):
+        """Compone URL RTSP si ya existe IP resuelta."""
         if self.ip:
             self.rtsp_url = f"rtsp://{self.usuario}:{self.password}@{self.ip}:554/stream1"
 
     def _resolve_ip_if_needed(self):
+        """Resuelve IP por MAC una sola vez cuando aún no se conoce."""
         if self.ip is None:
             self.ip = buscar_ip_por_mac(self.mac)
             self._build_rtsp_url()
 
     def _connect_and_capture_loop(self):
+        """Bucle principal de conexión, lectura de frames y reconexión."""
         while not self._stop_event.is_set():
             self._resolve_ip_if_needed()
             if not self.rtsp_url:
@@ -172,6 +202,7 @@ class CameraFeed(threading.Thread):
             time.sleep(1)
 
     def _write_if_recording(self, frame):
+        """Escribe frame al video de salida si la grabación está activa."""
         with self.writer_lock:
             if self.recording and self.out:
                 now = time.time()
@@ -180,6 +211,7 @@ class CameraFeed(threading.Thread):
                     self.last_write = now
 
     def toggle_record(self):
+        """Inicia/detiene grabación MP4 del stream actual."""
         with self.writer_lock:
             if not self.recording and self.frame is not None:
                 h, w, _ = self.frame.shape
@@ -207,6 +239,7 @@ class CameraFeed(threading.Thread):
             return True
 
     def capture_photo(self):
+        """Captura una imagen JPEG del último frame disponible."""
         with self.capture_lock:
             if self.frame is None:
                 return False, "Sin imagen disponible"
@@ -219,11 +252,12 @@ class CameraFeed(threading.Thread):
             return False, "No se pudo guardar la foto"
         return True, str(photo_path)
 
-
     def set_settings(self, settings):
+        """Actualiza configuración activa (credenciales Tapo/ruta media)."""
         self.settings = settings
 
     def get_tapo_client(self):
+        """Construye cliente Tapo usando credenciales globales o fallback RTSP."""
         if Tapo is None:
             raise RuntimeError("Falta el módulo 'pytapo'. Instala con: pip install pytapo")
 
@@ -235,6 +269,7 @@ class CameraFeed(threading.Thread):
         return Tapo(self.ip, tapo_user, tapo_password)
 
     def _call_first_available(self, client, method_names, *args):
+        """Invoca el primer método disponible entre alternativas compatibles."""
         for method_name in method_names:
             method = getattr(client, method_name, None)
             if callable(method):
@@ -242,10 +277,12 @@ class CameraFeed(threading.Thread):
         raise AttributeError(f"Ningún método disponible entre: {', '.join(method_names)}")
 
     def move(self, x_axis, y_axis):
+        """Envía comando PTZ de movimiento."""
         client = self.get_tapo_client()
         self._call_first_available(client, ["moveMotor", "move_motor", "move"], x_axis, y_axis)
 
     def zoom(self, zoom_in):
+        """Envía comando PTZ de zoom in/out."""
         client = self.get_tapo_client()
         if zoom_in:
             self._call_first_available(client, ["zoomIn", "zoom_in"])
@@ -253,8 +290,12 @@ class CameraFeed(threading.Thread):
             self._call_first_available(client, ["zoomOut", "zoom_out"])
 
 
-# ---------------- CAMERA WIDGET ----------------
+# ============================================================
+# TARJETA DE CÁMARA (GRID)
+# ============================================================
 class CameraWidget(QWidget):
+    """Tarjeta compacta para mostrar stream y acciones rápidas de una cámara."""
+
     def __init__(self, feed):
         super().__init__()
         self.feed = feed
@@ -298,9 +339,11 @@ class CameraWidget(QWidget):
         self.connection_timer.start(CONNECTION_CHECK_INTERVAL_MS)
 
     def _minute_connection_check(self):
+        """Verifica periódicamente salud de conexión del feed."""
         self.feed.check_connection()
 
     def on_toggle_record(self):
+        """Manejador UI para iniciar/detener grabación."""
         ok = self.feed.toggle_record()
         if not ok:
             self.status.setText("❌ Error al iniciar grabación")
@@ -314,6 +357,7 @@ class CameraWidget(QWidget):
             self.btn_record.setText("⏺ Grabar")
 
     def on_capture_photo(self):
+        """Manejador UI para capturar foto del stream."""
         ok, message = self.feed.capture_photo()
         if ok:
             self.status.setText(f"📸 Foto guardada: {message}")
@@ -321,6 +365,7 @@ class CameraWidget(QWidget):
             self.status.setText(f"❌ {message}")
 
     def update_frame(self):
+        """Renderiza el frame actual en la tarjeta, manteniendo proporción."""
         if self.feed.frame is not None:
             with self.feed.capture_lock:
                 frame = self.feed.frame.copy()
@@ -348,13 +393,18 @@ class CameraWidget(QWidget):
             self.status.setText("🟡 Sin imagen, reconectando…")
 
     def open_window(self, event):
+        """Abre ventana ampliada de la cámara con controles PTZ."""
         if self.cam_window is None:
             self.cam_window = CameraWindow(self.feed)
         self.cam_window.show()
 
 
-# ---------------- CAMERA WINDOW ----------------
+# ============================================================
+# VENTANA AMPLIADA DE CÁMARA
+# ============================================================
 class CameraWindow(QWidget):
+    """Vista ampliada de cámara con controles PTZ y acciones multimedia."""
+
     action_result = pyqtSignal(str)
 
     def __init__(self, feed):
@@ -438,6 +488,7 @@ class CameraWindow(QWidget):
         self.timer.start(40)
 
     def _set_ptz_enabled(self, enabled):
+        """Habilita o deshabilita todos los controles PTZ."""
         controls = [
             self.btn_up,
             self.btn_down,
@@ -451,6 +502,8 @@ class CameraWindow(QWidget):
             control.setEnabled(enabled)
 
     def _run_camera_action(self, action, success_message):
+        """Ejecuta acción PTZ en hilo separado y reporta estado a la UI."""
+
         def worker():
             try:
                 action()
@@ -461,13 +514,16 @@ class CameraWindow(QWidget):
         threading.Thread(target=worker, daemon=True, name=f"PTZ-{self.feed.mac}").start()
 
     def send_move(self, x_axis, y_axis):
+        """Envía acción de movimiento PTZ."""
         self._run_camera_action(lambda: self.feed.move(x_axis, y_axis), "✅ Movimiento enviado")
 
     def send_zoom(self, zoom_in):
+        """Envía acción de zoom PTZ."""
         message = "✅ Zoom + enviado" if zoom_in else "✅ Zoom - enviado"
         self._run_camera_action(lambda: self.feed.zoom(zoom_in), message)
 
     def on_toggle_record(self):
+        """Alterna grabación desde vista ampliada."""
         ok = self.feed.toggle_record()
         if not ok:
             self.action_result.emit("❌ Error al iniciar grabación")
@@ -476,10 +532,12 @@ class CameraWindow(QWidget):
         self.btn_record.setText("⏹ Detener" if self.feed.recording else "⏺ Grabar")
 
     def on_capture_photo(self):
+        """Captura foto desde vista ampliada."""
         ok, message = self.feed.capture_photo()
         self.action_result.emit(f"📸 Foto guardada: {message}" if ok else f"❌ {message}")
 
     def update_frame(self):
+        """Renderiza frame actual en la ventana ampliada."""
         if self.feed.frame is not None:
             with self.feed.capture_lock:
                 frame = self.feed.frame.copy()
@@ -501,14 +559,18 @@ class CameraWindow(QWidget):
             )
 
 
-# ---------------- GUARDAR Y CARGAR ----------------
+# ============================================================
+# PERSISTENCIA DE CONFIGURACIÓN Y CÁMARAS
+# ============================================================
 def save_settings(settings):
+    """Guarda la configuración global en archivo JSON."""
     settings_file = Path(__file__).with_name(SETTINGS_FILE)
     with settings_file.open("w", encoding="utf-8") as f:
         json.dump(settings, f, indent=4, ensure_ascii=False)
 
 
 def update_settings(partial_settings):
+    """Actualiza parcialmente la configuración persistida."""
     current_settings = load_settings()
     current_settings.update(partial_settings)
     save_settings(current_settings)
@@ -516,6 +578,7 @@ def update_settings(partial_settings):
 
 
 def load_settings():
+    """Carga configuración con fallback seguro si no existe/corrompido."""
     settings_file = Path(__file__).with_name(SETTINGS_FILE)
 
     try:
@@ -536,6 +599,7 @@ def load_settings():
 
 
 def save_cameras(widgets):
+    """Serializa el conjunto de cámaras actuales en `cameras.dat`."""
     cams_data = []
     for w in widgets:
         cam = {
@@ -551,8 +615,8 @@ def save_cameras(widgets):
         json.dump(cams_data, f, indent=4, ensure_ascii=False)
 
 
-
 def load_cameras(settings=None):
+    """Carga cámaras persistidas, inicia feeds y devuelve widgets listos para UI."""
     widgets = []
     data_file = Path(__file__).with_name("cameras.dat")
 

@@ -1,75 +1,131 @@
----
-
 # CCTV Responsive
 
-Este proyecto es una interfaz gráfica para gestionar cámaras de CCTV Tapo, desarrollada en Python usando PyQt6. Permite agregar cámaras mediante MAC, configurar credenciales globales, visualizar los feeds en una cuadrícula adaptable, y abrir vistas grandes para cada cámara, además de tomar fotos y gestionar configuraciones.
+Aplicación de escritorio en **Python + PyQt6** para administrar cámaras Tapo con una interfaz clara, responsiva y orientada a operación diaria.
+
+> Objetivo del proyecto: centralizar visualización, captura multimedia y configuración de cámaras en una sola interfaz, manteniendo una experiencia simple para el usuario final.
 
 ---
 
-## Características
+## 1) ¿Qué hace esta aplicación?
 
-- Agregar y gestionar cámaras mediante MAC, usuario y contraseña.
-- Configurar credenciales globales de Tapo.
-- Visualización en cuadrícula responsiva de múltiples cámaras.
-- Vista ampliada de la cámara con opción a tomar fotos.
-- Persistencia de configuraciones y cámaras agregadas.
-- Interfaz amigable y adaptable.
+La app permite:
+
+- Agregar y gestionar cámaras por **MAC**, usuario y contraseña.
+- Resolver IP en red local y abrir stream **RTSP** automáticamente.
+- Ver cámaras en una cuadrícula adaptable al número de dispositivos.
+- Abrir una vista ampliada con controles **PTZ** (si `pytapo` está disponible).
+- Tomar fotos y grabar videos por cámara.
+- Explorar y borrar archivos multimedia desde un panel dedicado.
+- Guardar configuración y cámaras para recuperar estado al reiniciar.
 
 ---
 
-## Requisitos
+## 2) Características principales
 
-- Python 3.8+
-- PyQt6
-- pytapo (para control de cámaras Tapo)
-- Otros módulos necesarios (como `math`, `sys`)
+### Gestión de cámaras
+- Alta de cámara (MAC, usuario, contraseña, etiqueta/tag).
+- Edición de cámaras existentes.
+- Eliminación con confirmación.
+- Listado tabular con búsqueda por MAC, IP o tag.
 
-Para instalar las dependencias:
+### Visualización
+- Grid dinámico de cámaras.
+- Tarjetas por cámara con estado de conexión.
+- Apertura de ventana ampliada por doble clic.
+
+### Multimedia
+- Captura de foto (`.jpg`).
+- Grabación de video (`.mp4`).
+- Panel de multimedia con:
+  - listado de archivos,
+  - previsualización de imagen/video,
+  - borrado simple y borrado múltiple.
+
+### Configuración
+- Credenciales globales para comandos PTZ mediante `pytapo`.
+- Configuración de carpeta para guardar/leer fotos y videos.
+
+---
+
+## 3) Requisitos
+
+- Python 3.8 o superior.
+- `PyQt6`
+- `opencv-python`
+- `pytapo` (opcional para PTZ, recomendado)
+
+Instalación rápida:
 
 ```bash
-pip install PyQt6 pytapo
+pip install PyQt6 opencv-python pytapo
 ```
 
 ---
 
-## Uso
+## 4) Ejecución
 
-1. Ejecuta el script principal: 
+Desde la carpeta `Dynamic_grid`:
 
 ```bash
 python main.py
 ```
 
-2. La ventana principal mostrará un panel donde puedes agregar cámaras, configurar credenciales globales y gestionar tus cámaras.
+---
 
-3. Para agregar una cámara, haz clic en "➕ Agregar cámara" y completa los datos.
+## 5) Flujo de uso recomendado
 
-4. Para modificar la configuración de Tapo, pulsa en "⚙️ Configuración Tapo".
-
-5. Las cámaras se muestran en una cuadrícula adaptable. Haz clic en una cámara para abrir una vista en grande.
-
-6. Desde la vista en grande, puedes tomar fotos o grabar (funcionalidad de grabación aún por implementar).
+1. Ir al tab de **Configuración** y definir:
+   - credenciales Tapo,
+   - directorio de multimedia.
+2. Ir al tab **Cámaras** y pulsar **➕ Agregar cámara**.
+3. Completar MAC, usuario, contraseña y tag.
+4. Verificar estado en la cuadrícula o en **Listado de cámaras**.
+5. Doble clic en una cámara para abrir vista ampliada y usar PTZ / captura / grabación.
+6. Revisar capturas en el tab **Multimedia**.
 
 ---
 
-## Estructura del código
+## 6) Estructura del proyecto
 
-- **MainWindow**: ventana principal con la interfaz de gestión.
-- **CameraFeed**: clase para gestionar cada feed de cámara.
-- **CameraWidget**: widget para cada cámara en la cuadrícula.
-- **AddCameraDialog**: diálogo para agregar nuevas cámaras.
-- **SettingsDialog**: diálogo para configurar credenciales globales.
-- **funciones.py**: funciones auxiliares para cargar y guardar configuraciones y cámaras.
-- **estilos.py**: estilos CSS para la interfaz.
-
----
-
-## Personalización y Extensiones
-
-- Puedes agregar funcionalidad de grabación de video.
-- Mejorar la detección de cámaras desconectadas.
-- Añadir soporte para diferentes modelos o marcas de cámaras.
-- Guardar las fotos y videos en directorios específicos.
+```text
+Dynamic_grid/
+├── main.py         # Interfaz principal y tabs de operación
+├── funciones.py    # Lógica de feed, widgets de cámara y persistencia
+├── estilos.py      # Hoja de estilos Qt (QSS)
+├── cameras.dat     # Persistencia de cámaras
+└── settings.json   # Persistencia de configuración (se crea automáticamente)
+```
 
 ---
 
+## 7) Componentes clave del código
+
+- **MainWindow** (`main.py`): orquesta tabs, grid, listado y configuración.
+- **MediaPanel** (`main.py`): explorador de fotos/videos con preview y borrado.
+- **CameraFeed** (`funciones.py`): hilo de captura RTSP, reconexión, foto y grabación.
+- **CameraWidget** (`funciones.py`): tarjeta de cámara para el grid.
+- **CameraWindow** (`funciones.py`): vista ampliada con controles PTZ.
+- **Persistencia** (`funciones.py`): carga/guardado de `settings` y `cameras`.
+
+---
+
+## 8) Notas técnicas
+
+- Si no está instalado `pytapo`, la aplicación sigue funcionando para visualización/captura, pero los controles PTZ se deshabilitan.
+- La detección de IP por MAC se realiza con ping + ARP en la red base configurada en `funciones.py` (`RED_BASE`).
+- Las credenciales RTSP se codifican para URL, manteniendo compatibilidad con datos existentes.
+
+---
+
+## 9) Posibles mejoras futuras
+
+- Integración de autenticación por perfiles de usuario.
+- Soporte para múltiples segmentos de red.
+- Detección de cámaras con escaneo concurrente optimizado.
+- Exportación de eventos y auditoría de acciones.
+
+---
+
+## 10) Estado
+
+Proyecto funcional para operación local de CCTV con enfoque en simplicidad de uso y persistencia básica.
